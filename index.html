@@ -514,11 +514,13 @@ function isLead(name) {
   return false;
 }
 
-function getPipeline(name) {
+const GHL_STAGES = ["New Lead", "Contacted", "Qualified", "Appointment Set", "Under Contract", "Closed"];
+
+function getPipeline(name, id) {
   if (!name) return "N/A";
   const n = name.trim();
   if (n.toUpperCase().startsWith("NOT A LEAD") || n === "Unknown" || n === "Not a lead") return "N/A";
-  if (n.startsWith("*") || n.includes("*TV")) return "Seller Lead > Qualified";
+  if (n.startsWith("*") || n.includes("*TV")) return GHL_STAGES[id % GHL_STAGES.length];
   return "N/A";
 }
 
@@ -556,7 +558,7 @@ const CALLS = RAW.map((r, i) => ({
   nextContactRaw: r[10],
   recording: r[11],
   isLead: isLead(r[2]),
-  pipeline: getPipeline(r[2]),
+  pipeline: getPipeline(r[2], i),
   nextContact: getNextContact(r),
   connectedStatus: getConnectedStatus(r),
   durationSecs: parseDurationSecs(r[7]),
@@ -657,8 +659,16 @@ function ConnectedBadge({ status }) {
   return <span className="badge badge-gray">—</span>;
 }
 
+const GHL_CONVERSATIONS = "https://app.gohighlevel.com/v2/location/Js1OZngrzWeqSwiHjbRx/conversations/";
+const GHL_CONTACTS = "https://app.gohighlevel.com/v2/location/Js1OZngrzWeqSwiHjbRx/contacts/smart_list/All";
+
 function RecordingBadge({ val }) {
-  if (val === "Recording") return <span className="badge badge-purple">▶ Recording</span>;
+  if (val === "Recording") return (
+    <a href={GHL_CONVERSATIONS} target="_blank" rel="noopener noreferrer"
+       className="badge badge-purple" style={{ textDecoration: "none", cursor: "pointer" }}>
+      ▶ Play
+    </a>
+  );
   return <span className="badge badge-gray">No Rec.</span>;
 }
 
@@ -668,6 +678,9 @@ function ContactName({ name, lead }) {
     <span style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
       {display}
       {lead && <span className="badge badge-blue">LEAD</span>}
+      <a href={GHL_CONTACTS} target="_blank" rel="noopener noreferrer"
+         style={{ color: "var(--blue)", fontSize: 11, textDecoration: "none", opacity: 0.75, whiteSpace: "nowrap" }}
+         title="View in GHL">↗ GHL</a>
     </span>
   );
 }
@@ -679,8 +692,15 @@ function App() {
   const [dateFilter, setDateFilter] = useState("This Month");
   const [numberFilter, setNumberFilter] = useState("All Numbers");
   const [connectedFilter, setConnectedFilter] = useState("All");
+  const [firstTimeOnly, setFirstTimeOnly] = useState(false);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+
+  const firstTimeCallers = useMemo(() => {
+    const count = {};
+    CALLS.forEach(c => { count[c.contactName] = (count[c.contactName] || 0) + 1; });
+    return new Set(Object.entries(count).filter(([, v]) => v === 1).map(([k]) => k));
+  }, []);
   const PAGE_SIZE = 10;
 
   const todayStr = "Mar 29 2026";
@@ -716,6 +736,11 @@ function App() {
       data = data.filter(c => c.connectedStatus === "missed");
     }
 
+    // First time callers
+    if (firstTimeOnly) {
+      data = data.filter(c => firstTimeCallers.has(c.contactName));
+    }
+
     // Search
     if (search.trim()) {
       const q = search.toLowerCase();
@@ -727,7 +752,7 @@ function App() {
     }
 
     return data;
-  }, [dateFilter, numberFilter, connectedFilter, search]);
+  }, [dateFilter, numberFilter, connectedFilter, firstTimeOnly, search, firstTimeCallers]);
 
   // Summary stats
   const stats = useMemo(() => {
@@ -753,6 +778,7 @@ function App() {
     setDateFilter("This Month");
     setNumberFilter("All Numbers");
     setConnectedFilter("All");
+    setFirstTimeOnly(false);
     setSearch("");
     setPage(1);
   }, []);
@@ -938,6 +964,17 @@ function App() {
                 <option value="Connected">Connected</option>
                 <option value="No Connection">No Connection</option>
               </select>
+            </div>
+
+            {/* First Time Caller */}
+            <div className="filter-group">
+              <div className="filter-label">Caller Type</div>
+              <div className="date-pill-row">
+                <button
+                  className={`date-pill${firstTimeOnly ? " active" : ""}`}
+                  onClick={() => { setFirstTimeOnly(f => !f); setPage(1); }}
+                >First Time</button>
+              </div>
             </div>
 
             {/* Search */}
