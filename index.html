@@ -1,457 +1,41 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Impact Home Team — Call Dashboard</title>
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <script src="https://unpkg.com/recharts@2.10.3/umd/Recharts.js"></script>
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-    :root {
-      --navy:        #1a1f36;
-      --navy-light:  #242944;
-      --navy-border: #2e3455;
-      --navy-hover:  #2a3050;
-      --bg:          #0f1220;
-      --surface:     #1c2138;
-      --surface2:    #212640;
-      --text:        #e2e8f0;
-      --text-muted:  #8892b0;
-      --text-dim:    #5a6285;
-      --green:       #10b981;
-      --green-bg:    rgba(16,185,129,.15);
-      --red:         #ef4444;
-      --red-bg:      rgba(239,68,68,.15);
-      --blue:        #3b82f6;
-      --blue-bg:     rgba(59,130,246,.15);
-      --purple:      #8b5cf6;
-      --purple-bg:   rgba(139,92,246,.15);
-      --yellow:      #f59e0b;
-      --yellow-bg:   rgba(245,158,11,.15);
-      --accent:      #3b82f6;
-      --radius:      10px;
-      --radius-sm:   6px;
-      --shadow:      0 4px 24px rgba(0,0,0,.4);
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Impact Home Team - Call Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.10.3/Recharts.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+  * { font-family: 'Inter', system-ui, sans-serif; }
+  body { margin: 0; background: #f3f4f6; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+  .mono { font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 0.82rem; }
+</style>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        navy: { DEFAULT: '#1a1f36', light: '#242b4a', lighter: '#2d355e' }
+      }
     }
-
-    body {
-      background: var(--bg);
-      color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      font-size: 14px;
-      line-height: 1.5;
-      min-height: 100vh;
-      display: flex;
-    }
-
-    /* ── Scrollbar ── */
-    ::-webkit-scrollbar { width: 6px; height: 6px; }
-    ::-webkit-scrollbar-track { background: var(--navy); }
-    ::-webkit-scrollbar-thumb { background: var(--navy-border); border-radius: 3px; }
-    ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
-
-    /* ── Sidebar ── */
-    #sidebar {
-      width: 240px;
-      min-width: 240px;
-      background: var(--navy);
-      border-right: 1px solid var(--navy-border);
-      display: flex;
-      flex-direction: column;
-      position: sticky;
-      top: 0;
-      height: 100vh;
-      overflow-y: auto;
-    }
-
-    .sidebar-logo {
-      padding: 24px 20px 20px;
-      border-bottom: 1px solid var(--navy-border);
-    }
-    .sidebar-logo .logo-icon {
-      width: 38px; height: 38px;
-      background: linear-gradient(135deg, var(--blue), #6366f1);
-      border-radius: 10px;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 18px; font-weight: 800; color: #fff;
-      margin-bottom: 10px;
-      box-shadow: 0 4px 12px rgba(59,130,246,.4);
-    }
-    .sidebar-logo h1 {
-      font-size: 13px; font-weight: 700;
-      color: var(--text); line-height: 1.3;
-      letter-spacing: .02em;
-    }
-    .sidebar-logo p { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
-
-    .sidebar-section { padding: 16px 12px 8px; }
-    .sidebar-section-label {
-      font-size: 10px; font-weight: 700;
-      color: var(--text-dim); letter-spacing: .1em;
-      text-transform: uppercase; padding: 0 8px;
-      margin-bottom: 6px;
-    }
-
-    .nav-item {
-      display: flex; align-items: center; gap: 10px;
-      padding: 9px 12px; border-radius: var(--radius-sm);
-      color: var(--text-muted); font-size: 13px; font-weight: 500;
-      cursor: pointer; transition: all .15s;
-      text-decoration: none;
-    }
-    .nav-item:hover { background: var(--navy-hover); color: var(--text); }
-    .nav-item.active {
-      background: var(--blue-bg);
-      color: var(--blue);
-      font-weight: 600;
-    }
-    .nav-item .nav-icon { font-size: 15px; width: 18px; text-align: center; }
-    .nav-badge {
-      margin-left: auto; background: var(--blue);
-      color: #fff; font-size: 10px; font-weight: 700;
-      padding: 1px 7px; border-radius: 20px;
-    }
-
-    .sidebar-footer {
-      margin-top: auto;
-      padding: 16px;
-      border-top: 1px solid var(--navy-border);
-      font-size: 11px;
-      color: var(--text-dim);
-    }
-    .sidebar-footer strong { color: var(--text-muted); display: block; margin-bottom: 2px; }
-
-    /* ── Main ── */
-    #main {
-      flex: 1;
-      overflow-y: auto;
-      padding: 28px 28px 48px;
-      min-width: 0;
-    }
-
-    /* ── Page Header ── */
-    .page-header {
-      display: flex; align-items: flex-start; justify-content: space-between;
-      margin-bottom: 24px; gap: 16px; flex-wrap: wrap;
-    }
-    .page-header h2 {
-      font-size: 22px; font-weight: 700; color: var(--text);
-      letter-spacing: -.01em;
-    }
-    .page-header p { font-size: 13px; color: var(--text-muted); margin-top: 3px; }
-
-    .header-actions { display: flex; gap: 10px; align-items: center; }
-
-    /* ── Buttons ── */
-    .btn {
-      display: inline-flex; align-items: center; gap: 7px;
-      padding: 8px 16px; border-radius: var(--radius-sm);
-      font-size: 13px; font-weight: 600; cursor: pointer;
-      border: none; transition: all .15s; white-space: nowrap;
-    }
-    .btn-primary { background: var(--blue); color: #fff; }
-    .btn-primary:hover { background: #2563eb; }
-    .btn-outline {
-      background: transparent;
-      border: 1px solid var(--navy-border);
-      color: var(--text-muted);
-    }
-    .btn-outline:hover { background: var(--navy-hover); color: var(--text); border-color: var(--text-dim); }
-    .btn-ghost { background: transparent; color: var(--text-muted); padding: 8px 10px; }
-    .btn-ghost:hover { color: var(--text); }
-
-    /* ── Summary Cards ── */
-    .cards-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-      gap: 16px;
-      margin-bottom: 24px;
-    }
-
-    .card {
-      background: var(--surface);
-      border: 1px solid var(--navy-border);
-      border-radius: var(--radius);
-      padding: 20px;
-      transition: border-color .15s;
-    }
-    .card:hover { border-color: var(--text-dim); }
-
-    .card-header {
-      display: flex; align-items: center; justify-content: space-between;
-      margin-bottom: 12px;
-    }
-    .card-label {
-      font-size: 12px; font-weight: 600;
-      color: var(--text-muted); letter-spacing: .04em;
-      text-transform: uppercase;
-    }
-    .card-icon {
-      width: 32px; height: 32px;
-      border-radius: 8px;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 15px;
-    }
-    .card-icon.blue  { background: var(--blue-bg);   color: var(--blue);   }
-    .card-icon.green { background: var(--green-bg);  color: var(--green);  }
-    .card-icon.yellow{ background: var(--yellow-bg); color: var(--yellow); }
-    .card-icon.purple{ background: var(--purple-bg); color: var(--purple); }
-
-    .card-value {
-      font-size: 30px; font-weight: 800;
-      color: var(--text); letter-spacing: -.02em; line-height: 1;
-      margin-bottom: 6px;
-    }
-    .card-sub { font-size: 12px; color: var(--text-muted); }
-    .card-change {
-      display: inline-flex; align-items: center; gap: 4px;
-      font-size: 12px; font-weight: 600;
-      padding: 2px 8px; border-radius: 20px; margin-left: 6px;
-    }
-    .card-change.up   { background: var(--green-bg); color: var(--green); }
-    .card-change.down { background: var(--red-bg);   color: var(--red);   }
-
-    /* ── Filters Bar ── */
-    .filters-bar {
-      background: var(--surface);
-      border: 1px solid var(--navy-border);
-      border-radius: var(--radius);
-      padding: 16px 18px;
-      margin-bottom: 20px;
-      display: flex; flex-wrap: wrap; gap: 10px;
-      align-items: center;
-    }
-
-    .filter-group { display: flex; flex-direction: column; gap: 4px; }
-    .filter-label { font-size: 10px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: .07em; }
-
-    .filter-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; width: 100%; }
-
-    select, input[type="text"], input[type="date"] {
-      background: var(--surface2);
-      border: 1px solid var(--navy-border);
-      border-radius: var(--radius-sm);
-      color: var(--text);
-      font-size: 13px;
-      padding: 7px 10px;
-      outline: none;
-      transition: border-color .15s;
-      font-family: inherit;
-    }
-    select:focus, input:focus { border-color: var(--blue); }
-    select option { background: var(--surface2); }
-
-    .search-wrap { position: relative; }
-    .search-wrap input { padding-left: 32px; min-width: 200px; }
-    .search-icon {
-      position: absolute; left: 10px; top: 50%;
-      transform: translateY(-50%);
-      color: var(--text-dim); font-size: 14px; pointer-events: none;
-    }
-
-    .date-pill-row { display: flex; gap: 6px; flex-wrap: wrap; }
-    .date-pill {
-      padding: 6px 13px; border-radius: 20px;
-      font-size: 12px; font-weight: 600;
-      border: 1px solid var(--navy-border);
-      background: transparent; color: var(--text-muted);
-      cursor: pointer; transition: all .15s;
-    }
-    .date-pill:hover { border-color: var(--blue); color: var(--blue); }
-    .date-pill.active {
-      background: var(--blue-bg); border-color: var(--blue); color: var(--blue);
-    }
-
-    .filter-divider {
-      width: 1px; background: var(--navy-border);
-      align-self: stretch; margin: 0 4px;
-    }
-
-    /* ── Charts Section ── */
-    .charts-grid {
-      display: grid;
-      grid-template-columns: 2fr 1fr;
-      gap: 16px;
-      margin-bottom: 20px;
-    }
-    @media (max-width: 900px) {
-      .charts-grid { grid-template-columns: 1fr; }
-    }
-
-    .chart-card {
-      background: var(--surface);
-      border: 1px solid var(--navy-border);
-      border-radius: var(--radius);
-      padding: 20px;
-    }
-    .chart-title {
-      font-size: 14px; font-weight: 700;
-      color: var(--text); margin-bottom: 4px;
-    }
-    .chart-sub { font-size: 12px; color: var(--text-muted); margin-bottom: 16px; }
-
-    .chart-legend {
-      display: flex; gap: 16px; flex-wrap: wrap;
-      margin-bottom: 14px;
-    }
-    .legend-item {
-      display: flex; align-items: center; gap: 6px;
-      font-size: 12px; color: var(--text-muted);
-    }
-    .legend-dot { width: 8px; height: 8px; border-radius: 50%; }
-
-    /* ── Third chart row ── */
-    .chart-full {
-      background: var(--surface);
-      border: 1px solid var(--navy-border);
-      border-radius: var(--radius);
-      padding: 20px;
-      margin-bottom: 20px;
-    }
-
-    /* ── Call Log Section ── */
-    .section-header {
-      display: flex; align-items: center; justify-content: space-between;
-      margin-bottom: 14px; flex-wrap: wrap; gap: 10px;
-    }
-    .section-title {
-      font-size: 16px; font-weight: 700; color: var(--text);
-    }
-    .section-count {
-      font-size: 12px; color: var(--text-muted);
-      background: var(--surface2);
-      border: 1px solid var(--navy-border);
-      padding: 3px 10px; border-radius: 20px;
-      margin-left: 8px;
-    }
-
-    /* ── Table ── */
-    .table-wrap {
-      background: var(--surface);
-      border: 1px solid var(--navy-border);
-      border-radius: var(--radius);
-      overflow: hidden;
-    }
-
-    table {
-      width: 100%; border-collapse: collapse;
-    }
-    thead tr {
-      background: var(--navy);
-      border-bottom: 1px solid var(--navy-border);
-    }
-    th {
-      padding: 11px 14px;
-      text-align: left;
-      font-size: 11px; font-weight: 700;
-      color: var(--text-dim); text-transform: uppercase;
-      letter-spacing: .07em; white-space: nowrap;
-    }
-    th.sortable { cursor: pointer; user-select: none; }
-    th.sortable:hover { color: var(--text-muted); }
-    th .sort-arrow { margin-left: 4px; opacity: .5; }
-
-    tbody tr {
-      border-bottom: 1px solid var(--navy-border);
-      transition: background .1s;
-    }
-    tbody tr:last-child { border-bottom: none; }
-    tbody tr:hover { background: var(--navy-hover); }
-
-    td {
-      padding: 11px 14px;
-      font-size: 13px; color: var(--text);
-      vertical-align: middle;
-    }
-    td.muted { color: var(--text-muted); }
-    td.mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; color: var(--text-muted); }
-
-    /* ── Badges ── */
-    .badge {
-      display: inline-flex; align-items: center; gap: 4px;
-      padding: 2px 8px; border-radius: 20px;
-      font-size: 11px; font-weight: 700; white-space: nowrap;
-    }
-    .badge-green  { background: var(--green-bg);  color: var(--green);  }
-    .badge-red    { background: var(--red-bg);    color: var(--red);    }
-    .badge-blue   { background: var(--blue-bg);   color: var(--blue);   }
-    .badge-purple { background: var(--purple-bg); color: var(--purple); }
-    .badge-yellow { background: var(--yellow-bg); color: var(--yellow); }
-    .badge-gray   { background: rgba(100,116,139,.15); color: #94a3b8; }
-    .badge-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
-
-    /* ── Pagination ── */
-    .pagination {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 14px 18px;
-      border-top: 1px solid var(--navy-border);
-      background: var(--navy);
-      flex-wrap: wrap; gap: 10px;
-    }
-    .pagination-info { font-size: 12px; color: var(--text-muted); }
-    .pagination-controls { display: flex; gap: 4px; align-items: center; }
-    .page-btn {
-      width: 30px; height: 30px;
-      border-radius: var(--radius-sm);
-      border: 1px solid var(--navy-border);
-      background: transparent; color: var(--text-muted);
-      font-size: 12px; font-weight: 600;
-      cursor: pointer; transition: all .15s;
-      display: flex; align-items: center; justify-content: center;
-    }
-    .page-btn:hover { background: var(--navy-hover); color: var(--text); }
-    .page-btn.active { background: var(--blue); border-color: var(--blue); color: #fff; }
-    .page-btn:disabled { opacity: .3; cursor: not-allowed; }
-
-    /* ── Tooltip custom ── */
-    .recharts-tooltip-wrapper { outline: none; }
-    .custom-tooltip {
-      background: var(--navy);
-      border: 1px solid var(--navy-border);
-      border-radius: var(--radius-sm);
-      padding: 10px 14px;
-      font-size: 12px;
-      box-shadow: var(--shadow);
-    }
-    .custom-tooltip .tt-label { color: var(--text-muted); margin-bottom: 6px; font-weight: 600; }
-    .custom-tooltip .tt-row { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
-    .custom-tooltip .tt-dot { width: 8px; height: 8px; border-radius: 50%; }
-    .custom-tooltip .tt-key { color: var(--text-muted); }
-    .custom-tooltip .tt-val { color: var(--text); font-weight: 700; margin-left: auto; padding-left: 12px; }
-
-    /* ── Empty state ── */
-    .empty-state {
-      padding: 48px; text-align: center;
-      color: var(--text-muted);
-    }
-    .empty-state .empty-icon { font-size: 36px; margin-bottom: 12px; }
-    .empty-state p { font-size: 14px; }
-
-    /* ── Responsive ── */
-    @media (max-width: 768px) {
-      #sidebar { display: none; }
-      #main { padding: 16px; }
-    }
-  </style>
+  }
+}
+</script>
 </head>
 <body>
 <div id="root"></div>
-
 <script type="text/babel">
 const { useState, useMemo, useCallback } = React;
-const {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, Legend
-} = Recharts;
+const { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } = Recharts;
 
-/* ═══════════════════════════════════════════════════
-   RAW DATA
-═══════════════════════════════════════════════════ */
-const RAW = [
+const CALL_DATA = [
   ["Mar 28 2026","06:20 PM","Unknown","+1 443-554-5766","+1 410-824-1687","Web Leads (SEO)","","39s","-","Unknown","","No Recording"],
   ["Mar 28 2026","02:26 PM","Philip Jones*TV","+1 443-991-2905","+1 410-650-6122","Mike's Number","","2m 58s","-","","","Recording"],
   ["Mar 28 2026","01:54 PM","Philip Jones*TV","+1 443-991-2905","+1 410-498-7172","Emma's Number","","10s","-","Unknown","","No Recording"],
@@ -481,741 +65,508 @@ const RAW = [
   ["Mar 18 2026","10:30 AM","*Kevin Harris","+1 301-555-2345","+1 410-264-1642","Google Ads","Connected","4m 10s","Connected","","","Recording"],
   ["Mar 15 2026","03:15 PM","*Jennifer Lee","+1 443-555-6789","+1 410-824-1687","Web Leads (SEO)","Connected","2m 55s","Connected","Unknown","","Recording"],
   ["Mar 10 2026","01:00 PM","*Chris Martin","+1 240-555-0123","+1 410-983-3325","GMB Impact Home","Connected","7m 20s","Connected","","","Recording"],
-  ["Mar 5 2026","11:45 AM","*Patricia White","+1 410-555-4567","+1 410-264-1642","Google Ads","Connected","3m 05s","Connected","Unknown","","Recording"],
+  ["Mar 5 2026","11:45 AM","*Patricia White","+1 410-555-4567","+1 410-264-1642","Google Ads","Connected","3m 05s","Connected","Unknown","","Recording"]
 ];
 
-/* ═══════════════════════════════════════════════════
-   DATA PROCESSING
-═══════════════════════════════════════════════════ */
-function parseDurationSecs(d) {
-  if (!d || d === "0s" || d === "-") return 0;
-  const m = d.match(/(?:(\d+)m\s*)?(\d+)s/);
-  if (!m) return 0;
-  return (parseInt(m[1] || 0) * 60) + parseInt(m[2] || 0);
+function parseDate(dateStr, timeStr) {
+  return new Date(dateStr + ' ' + timeStr);
 }
 
-function formatDurationAvg(secs) {
-  if (secs === 0) return "0s";
+function parseDuration(dur) {
+  if (!dur || dur === '0s') return 0;
+  let total = 0;
+  const mMatch = dur.match(/(\d+)m/);
+  const sMatch = dur.match(/(\d+)s/);
+  if (mMatch) total += parseInt(mMatch[1]) * 60;
+  if (sMatch) total += parseInt(sMatch[1]);
+  return total;
+}
+
+function formatDuration(secs) {
+  if (secs === 0) return '0s';
   const m = Math.floor(secs / 60);
-  const s = Math.round(secs % 60);
-  if (m === 0) return `${s}s`;
-  return `${m}m ${s}s`;
-}
-
-function parseDate(dateStr) {
-  return new Date(dateStr);
+  const s = secs % 60;
+  return m > 0 ? `${m}m ${s}s` : `${s}s`;
 }
 
 function isLead(name) {
-  if (!name) return false;
   const n = name.trim();
-  if (n.startsWith("*")) return true;
-  // name ends with *TV and starts with * handled above
-  return false;
+  if (n === 'Unknown' || n.toUpperCase().startsWith('NOT A LEAD')) return false;
+  return n.startsWith('*');
 }
 
-const GHL_STAGES = ["New Lead", "Contacted", "Qualified", "Appointment Set", "Under Contract", "Closed"];
-
-function getPipeline(name, id) {
-  if (!name) return "N/A";
-  const n = name.trim();
-  if (n.toUpperCase().startsWith("NOT A LEAD") || n === "Unknown" || n === "Not a lead") return "N/A";
-  if (n.startsWith("*") || n.includes("*TV")) return GHL_STAGES[id % GHL_STAGES.length];
-  return "N/A";
+function cleanName(name) {
+  let n = name.trim();
+  if (n.startsWith('*')) n = n.substring(1);
+  return n;
 }
 
-function getNextContact(row) {
-  const name = row[2] || "";
-  const n = name.trim();
-  if (n.toUpperCase().startsWith("NOT A LEAD") || n === "Unknown" || n === "Not a lead") return "N/A";
-  if (!n.startsWith("*") && !n.includes("*")) return "N/A";
-  // 2-3 days after call
-  const d = parseDate(row[0]);
-  d.setDate(d.getDate() + 2);
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+function isConnected(row) {
+  return row[6] === 'Connected' || row[8] === 'Connected';
 }
 
-function getConnectedStatus(row) {
-  const connected = row[6];
-  const result = row[8];
-  if (connected === "Connected" || result === "Connected") return "connected";
-  if (connected === "No" || result === "No Connection") return "missed";
-  return "unknown";
+function addDays(date, days) {
+  const d = new Date(date);
+  d.setDate(d.getDate() + days);
+  return d;
 }
 
-const CALLS = RAW.map((r, i) => ({
-  id: i,
-  date: r[0],
-  time: r[1],
-  contactName: r[2],
-  callerPhone: r[3],
-  trackingPhone: r[4],
-  numberName: r[5],
-  connectedRaw: r[6],
-  duration: r[7],
-  result: r[8],
-  pipelineRaw: r[9],
-  nextContactRaw: r[10],
-  recording: r[11],
-  isLead: isLead(r[2]),
-  pipeline: getPipeline(r[2], i),
-  nextContact: getNextContact(r),
-  connectedStatus: getConnectedStatus(r),
-  durationSecs: parseDurationSecs(r[7]),
-  dateObj: parseDate(r[0]),
-}));
-
-const NUMBER_NAMES = ["All Numbers", ...Array.from(new Set(CALLS.map(c => c.numberName)))];
-
-/* ═══════════════════════════════════════════════════
-   CHART DATA HELPERS
-═══════════════════════════════════════════════════ */
-function buildDailyVolume(calls) {
-  const map = {};
-  calls.forEach(c => {
-    const k = c.date;
-    if (!map[k]) map[k] = { date: k, connected: 0, missed: 0, unknown: 0 };
-    map[k][c.connectedStatus]++;
-  });
-  return Object.values(map)
-    .sort((a, b) => new Date(a.date) - new Date(b.date))
-    .map(r => ({ ...r, dateShort: r.date.replace(" 2026", "").replace("Mar ", "Mar ") }));
+function fmtShortDate(d) {
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return `${months[d.getMonth()]} ${d.getDate()}`;
 }
 
-function buildConnectionPie(calls) {
-  const connected = calls.filter(c => c.connectedStatus === "connected").length;
-  const missed = calls.filter(c => c.connectedStatus === "missed").length;
-  const unknown = calls.filter(c => c.connectedStatus === "unknown").length;
-  return [
-    { name: "Connected", value: connected, color: "#10b981" },
-    { name: "No Connection", value: missed, color: "#ef4444" },
-    { name: "Unknown", value: unknown, color: "#6366f1" },
-  ].filter(d => d.value > 0);
-}
+const calls = CALL_DATA.map((row, i) => {
+  const date = parseDate(row[0], row[1]);
+  const lead = isLead(row[2]);
+  const connected = isConnected(row);
+  const durSecs = parseDuration(row[7]);
+  const nextDate = lead ? addDays(date, 2 + (i % 2)) : null;
+  return {
+    id: i,
+    date,
+    dateStr: row[0],
+    timeStr: row[1],
+    rawName: row[2],
+    name: cleanName(row[2]),
+    callerPhone: row[3],
+    dialedNumber: row[4],
+    numberName: row[5],
+    connectedRaw: row[6],
+    duration: row[7],
+    durationSecs: durSecs,
+    connectionStatus: row[8],
+    connected,
+    isLead: lead,
+    recording: row[11],
+    pipeline: lead ? 'Seller Lead > Qualified' : 'N/A',
+    nextContact: nextDate ? `${fmtShortDate(nextDate)}` : 'N/A'
+  };
+});
 
-function buildByNumber(calls) {
-  const map = {};
-  calls.forEach(c => {
-    if (!map[c.numberName]) map[c.numberName] = { name: c.numberName, calls: 0, connected: 0 };
-    map[c.numberName].calls++;
-    if (c.connectedStatus === "connected") map[c.numberName].connected++;
-  });
-  return Object.values(map).sort((a, b) => b.calls - a.calls);
-}
+const numberNames = [...new Set(calls.map(c => c.numberName))].sort();
 
-/* ═══════════════════════════════════════════════════
-   COMPONENTS
-═══════════════════════════════════════════════════ */
+// Icons
+const PhoneIcon = () => (
+  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"/>
+  </svg>
+);
+const ChartIcon = () => (
+  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+  </svg>
+);
+const UsersIcon = () => (
+  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/>
+  </svg>
+);
+const SearchIcon = () => (
+  <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+  </svg>
+);
+const FilterIcon = () => (
+  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/>
+  </svg>
+);
+const ClockIcon = () => (
+  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+  </svg>
+);
+const CheckIcon = () => (
+  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+  </svg>
+);
 
-function BarTooltip({ active, payload, label }) {
-  if (!active || !payload?.length) return null;
+function SummaryCard({ icon, label, value, sub, color }) {
   return (
-    <div className="custom-tooltip">
-      <div className="tt-label">{label}</div>
-      {payload.map((p, i) => (
-        <div key={i} className="tt-row">
-          <div className="tt-dot" style={{ background: p.fill }} />
-          <span className="tt-key">{p.name}</span>
-          <span className="tt-val">{p.value}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function PieTooltip({ active, payload }) {
-  if (!active || !payload?.length) return null;
-  const d = payload[0];
-  return (
-    <div className="custom-tooltip">
-      <div className="tt-row">
-        <div className="tt-dot" style={{ background: d.payload.color }} />
-        <span className="tt-key">{d.name}</span>
-        <span className="tt-val">{d.value}</span>
+    <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 flex items-start gap-4">
+      <div className={`p-3 rounded-lg ${color}`}>{icon}</div>
+      <div>
+        <p className="text-sm text-gray-500 font-medium">{label}</p>
+        <p className="text-2xl font-bold text-gray-900 mt-0.5">{value}</p>
+        {sub && <p className="text-xs text-gray-400 mt-1">{sub}</p>}
       </div>
     </div>
   );
 }
 
-function NumberTooltip({ active, payload, label }) {
-  if (!active || !payload?.length) return null;
+function Badge({ children, color }) {
+  const colors = {
+    green: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    red: 'bg-red-50 text-red-700 border-red-200',
+    blue: 'bg-blue-50 text-blue-700 border-blue-200',
+    purple: 'bg-purple-50 text-purple-700 border-purple-200',
+    gray: 'bg-gray-50 text-gray-500 border-gray-200',
+    amber: 'bg-amber-50 text-amber-700 border-amber-200',
+  };
   return (
-    <div className="custom-tooltip">
-      <div className="tt-label">{label}</div>
-      {payload.map((p, i) => (
-        <div key={i} className="tt-row">
-          <div className="tt-dot" style={{ background: p.fill }} />
-          <span className="tt-key">{p.name}</span>
-          <span className="tt-val">{p.value}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function ConnectedBadge({ status }) {
-  if (status === "connected") return <span className="badge badge-green"><span className="badge-dot" />Connected</span>;
-  if (status === "missed") return <span className="badge badge-red"><span className="badge-dot" />No Connection</span>;
-  return <span className="badge badge-gray">—</span>;
-}
-
-const GHL_CONVERSATIONS = "https://app.gohighlevel.com/v2/location/Js1OZngrzWeqSwiHjbRx/conversations/";
-const GHL_CONTACTS = "https://app.gohighlevel.com/v2/location/Js1OZngrzWeqSwiHjbRx/contacts/smart_list/All";
-
-function RecordingBadge({ val }) {
-  if (val === "Recording") return (
-    <a href={GHL_CONVERSATIONS} target="_blank" rel="noopener noreferrer"
-       className="badge badge-purple" style={{ textDecoration: "none", cursor: "pointer" }}>
-      ▶ Play
-    </a>
-  );
-  return <span className="badge badge-gray">No Rec.</span>;
-}
-
-function ContactName({ name, lead }) {
-  const display = name.replace(/^\*/, "").replace(/\*TV$/, "").trim() || name;
-  return (
-    <span style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
-      {display}
-      {lead && <span className="badge badge-blue">LEAD</span>}
-      <a href={GHL_CONTACTS} target="_blank" rel="noopener noreferrer"
-         style={{ color: "var(--blue)", fontSize: 11, textDecoration: "none", opacity: 0.75, whiteSpace: "nowrap" }}
-         title="View in GHL">↗ GHL</a>
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${colors[color] || colors.gray}`}>
+      {children}
     </span>
   );
 }
 
-/* ═══════════════════════════════════════════════════
-   MAIN APP
-═══════════════════════════════════════════════════ */
+const COLORS = { connected: '#10b981', missed: '#ef4444', blue: '#3b82f6' };
+const PIE_COLORS = ['#10b981', '#ef4444'];
+
 function App() {
-  const [dateFilter, setDateFilter] = useState("This Month");
-  const [numberFilter, setNumberFilter] = useState("All Numbers");
-  const [connectedFilter, setConnectedFilter] = useState("All");
-  const [firstTimeOnly, setFirstTimeOnly] = useState(false);
-  const [search, setSearch] = useState("");
+  const [dateRange, setDateRange] = useState('month');
+  const [numberFilter, setNumberFilter] = useState('');
+  const [connFilter, setConnFilter] = useState('');
+  const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
+  const [sidebarTab, setSidebarTab] = useState('dashboard');
+  const perPage = 10;
 
-  const firstTimeCallers = useMemo(() => {
-    const count = {};
-    CALLS.forEach(c => { count[c.contactName] = (count[c.contactName] || 0) + 1; });
-    return new Set(Object.entries(count).filter(([, v]) => v === 1).map(([k]) => k));
-  }, []);
-  const PAGE_SIZE = 10;
-
-  const todayStr = "Mar 29 2026";
-  const today = new Date("Mar 29 2026");
+  const now = new Date('2026-03-29T00:00:00');
 
   const filtered = useMemo(() => {
-    let data = [...CALLS];
+    return calls.filter(c => {
+      // Date range
+      const diff = (now - c.date) / (1000*60*60*24);
+      if (dateRange === 'today' && diff > 1) return false;
+      if (dateRange === 'yesterday' && (diff < 1 || diff > 2)) return false;
+      if (dateRange === 'week' && diff > 7) return false;
+      if (dateRange === 'month' && diff > 31) return false;
 
-    // Date filter
-    if (dateFilter === "Today") {
-      data = data.filter(c => c.date === "Mar 28 2026" || c.date === todayStr);
-      // use Mar 28 as "today" since data has Mar 28 as latest
-      data = data.filter(c => c.date === "Mar 28 2026");
-    } else if (dateFilter === "Yesterday") {
-      data = data.filter(c => c.date === "Mar 27 2026");
-    } else if (dateFilter === "This Week") {
-      // Mar 23–29
-      const weekStart = new Date("Mar 23 2026");
-      data = data.filter(c => c.dateObj >= weekStart);
-    } else if (dateFilter === "This Month") {
-      data = data.filter(c => c.date.includes("Mar 2026"));
-    }
+      if (numberFilter && c.numberName !== numberFilter) return false;
+      if (connFilter === 'connected' && !c.connected) return false;
+      if (connFilter === 'missed' && c.connected) return false;
 
-    // Number filter
-    if (numberFilter !== "All Numbers") {
-      data = data.filter(c => c.numberName === numberFilter);
-    }
+      if (search) {
+        const s = search.toLowerCase();
+        if (!c.name.toLowerCase().includes(s) && !c.callerPhone.includes(s)) return false;
+      }
+      return true;
+    });
+  }, [dateRange, numberFilter, connFilter, search]);
 
-    // Connected filter
-    if (connectedFilter === "Connected") {
-      data = data.filter(c => c.connectedStatus === "connected");
-    } else if (connectedFilter === "No Connection") {
-      data = data.filter(c => c.connectedStatus === "missed");
-    }
-
-    // First time callers
-    if (firstTimeOnly) {
-      data = data.filter(c => firstTimeCallers.has(c.contactName));
-    }
-
-    // Search
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      data = data.filter(c =>
-        c.contactName.toLowerCase().includes(q) ||
-        c.callerPhone.includes(q) ||
-        c.numberName.toLowerCase().includes(q)
-      );
-    }
-
-    return data;
-  }, [dateFilter, numberFilter, connectedFilter, firstTimeOnly, search, firstTimeCallers]);
-
-  // Summary stats
   const stats = useMemo(() => {
     const total = filtered.length;
-    const connected = filtered.filter(c => c.connectedStatus === "connected").length;
-    const answerRate = total > 0 ? Math.round((connected / total) * 100) : 0;
-    const totalSecs = filtered.reduce((a, c) => a + c.durationSecs, 0);
-    const avgSecs = total > 0 ? Math.round(totalSecs / total) : 0;
-    const uniqueLeads = new Set(
-      filtered.filter(c => c.isLead).map(c => c.callerPhone)
-    ).size;
-    return { total, answerRate, avgSecs, uniqueLeads };
+    const conn = filtered.filter(c => c.connected).length;
+    const rate = total > 0 ? Math.round((conn / total) * 100) : 0;
+    const totalDur = filtered.reduce((a, c) => a + c.durationSecs, 0);
+    const avgDur = total > 0 ? Math.round(totalDur / total) : 0;
+    const leads = filtered.filter(c => c.isLead).length;
+    const phones = new Set(filtered.map(c => c.callerPhone));
+    const todayCalls = filtered.filter(c => (now - c.date) / (1000*60*60*24) < 1).length;
+    const weekCalls = filtered.filter(c => (now - c.date) / (1000*60*60*24) < 7).length;
+    return { total, conn, rate, avgDur, leads, unique: phones.size, todayCalls, weekCalls };
   }, [filtered]);
 
-  const dailyVolume = useMemo(() => buildDailyVolume(filtered), [filtered]);
-  const pieSections = useMemo(() => buildConnectionPie(filtered), [filtered]);
-  const byNumber = useMemo(() => buildByNumber(filtered), [filtered]);
+  // Charts data
+  const dailyData = useMemo(() => {
+    const map = {};
+    filtered.forEach(c => {
+      const key = c.dateStr;
+      if (!map[key]) map[key] = { date: key, connected: 0, missed: 0 };
+      c.connected ? map[key].connected++ : map[key].missed++;
+    });
+    return Object.values(map).sort((a, b) => new Date(a.date) - new Date(b.date));
+  }, [filtered]);
 
-  const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
-  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const pieData = useMemo(() => [
+    { name: 'Connected', value: stats.conn },
+    { name: 'Missed', value: stats.total - stats.conn }
+  ], [stats]);
 
-  const clearFilters = useCallback(() => {
-    setDateFilter("This Month");
-    setNumberFilter("All Numbers");
-    setConnectedFilter("All");
-    setFirstTimeOnly(false);
-    setSearch("");
+  const numberData = useMemo(() => {
+    const map = {};
+    filtered.forEach(c => {
+      if (!map[c.numberName]) map[c.numberName] = 0;
+      map[c.numberName]++;
+    });
+    return Object.entries(map).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
+  }, [filtered]);
+
+  const totalPages = Math.ceil(filtered.length / perPage);
+  const paged = filtered.slice((page - 1) * perPage, page * perPage);
+
+  const clearFilters = () => {
+    setDateRange('month');
+    setNumberFilter('');
+    setConnFilter('');
+    setSearch('');
     setPage(1);
-  }, []);
+  };
 
-  const handleFilter = useCallback((setter) => (val) => {
-    setter(val);
-    setPage(1);
-  }, []);
+  const hasFilters = dateRange !== 'month' || numberFilter || connFilter || search;
 
   return (
-    <React.Fragment>
-      {/* ── Sidebar ── */}
-      <nav id="sidebar">
-        <div className="sidebar-logo">
-          <div className="logo-icon">IH</div>
-          <h1>Impact Home Team</h1>
-          <p>Call Tracking Dashboard</p>
+    <div className="flex h-screen overflow-hidden">
+      {/* Sidebar */}
+      <aside className="w-60 flex-shrink-0 flex flex-col" style={{ background: '#1a1f36' }}>
+        <div className="p-5 border-b border-white/10">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-blue-500 flex items-center justify-center">
+              <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/>
+              </svg>
+            </div>
+            <div>
+              <h1 className="text-white font-bold text-sm leading-tight">Impact Home</h1>
+              <p className="text-blue-300 text-xs">Call Tracking</p>
+            </div>
+          </div>
         </div>
 
-        <div className="sidebar-section">
-          <div className="sidebar-section-label">Analytics</div>
-          <a className="nav-item active">
-            <span className="nav-icon">📞</span>
-            Call Activity
-            <span className="nav-badge">{CALLS.length}</span>
-          </a>
-          <a className="nav-item">
-            <span className="nav-icon">📊</span>
-            Performance
-          </a>
-          <a className="nav-item">
-            <span className="nav-icon">🎯</span>
-            Lead Pipeline
-          </a>
-          <a className="nav-item">
-            <span className="nav-icon">📈</span>
-            Conversion
-          </a>
+        <nav className="flex-1 p-3 space-y-1">
+          <button onClick={() => setSidebarTab('dashboard')}
+            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition ${sidebarTab === 'dashboard' ? 'bg-white/10 text-white' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}>
+            <ChartIcon /> Dashboard
+          </button>
+          <button onClick={() => setSidebarTab('dashboard')}
+            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-400 hover:text-white hover:bg-white/5 transition">
+            <PhoneIcon /> Call Log
+          </button>
+          <button onClick={() => setSidebarTab('dashboard')}
+            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-400 hover:text-white hover:bg-white/5 transition">
+            <UsersIcon /> Leads
+          </button>
+
+          <div className="pt-4 pb-2 px-3">
+            <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Quick Filters</p>
+          </div>
+          {[['today','Today'],['yesterday','Yesterday'],['week','This Week'],['month','This Month']].map(([val, label]) => (
+            <button key={val} onClick={() => { setDateRange(val); setPage(1); }}
+              className={`w-full text-left px-3 py-2 rounded-lg text-sm transition ${dateRange === val ? 'bg-blue-500/20 text-blue-300 font-medium' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}>
+              {label}
+            </button>
+          ))}
+
+          <div className="pt-4 pb-2 px-3">
+            <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Connection</p>
+          </div>
+          <button onClick={() => { setConnFilter(connFilter === 'connected' ? '' : 'connected'); setPage(1); }}
+            className={`w-full text-left px-3 py-2 rounded-lg text-sm transition flex items-center gap-2 ${connFilter === 'connected' ? 'bg-emerald-500/20 text-emerald-300' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}>
+            <span className="w-2 h-2 rounded-full bg-emerald-400"></span> Connected
+          </button>
+          <button onClick={() => { setConnFilter(connFilter === 'missed' ? '' : 'missed'); setPage(1); }}
+            className={`w-full text-left px-3 py-2 rounded-lg text-sm transition flex items-center gap-2 ${connFilter === 'missed' ? 'bg-red-500/20 text-red-300' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}>
+            <span className="w-2 h-2 rounded-full bg-red-400"></span> Not Connected
+          </button>
+        </nav>
+
+        <div className="p-4 border-t border-white/10">
+          <p className="text-gray-500 text-xs text-center">Impact Home Team &copy; 2026</p>
         </div>
+      </aside>
 
-        <div className="sidebar-section">
-          <div className="sidebar-section-label">Tracking Numbers</div>
-          <a className="nav-item">
-            <span className="nav-icon">📍</span>
-            Google Ads
-          </a>
-          <a className="nav-item">
-            <span className="nav-icon">🌐</span>
-            Web Leads (SEO)
-          </a>
-          <a className="nav-item">
-            <span className="nav-icon">📌</span>
-            GMB Impact Home
-          </a>
-          <a className="nav-item">
-            <span className="nav-icon">👤</span>
-            Agent Numbers
-          </a>
-        </div>
-
-        <div className="sidebar-section">
-          <div className="sidebar-section-label">Settings</div>
-          <a className="nav-item">
-            <span className="nav-icon">⚙️</span>
-            Integrations
-          </a>
-          <a className="nav-item">
-            <span className="nav-icon">🔔</span>
-            Notifications
-          </a>
-        </div>
-
-        <div className="sidebar-footer">
-          <strong>Impact Home Team</strong>
-          Baltimore, MD · Real Estate
-        </div>
-      </nav>
-
-      {/* ── Main Content ── */}
-      <main id="main">
-
-        {/* Page Header */}
-        <div className="page-header">
+      {/* Main content */}
+      <main className="flex-1 overflow-y-auto bg-gray-50">
+        {/* Top bar */}
+        <header className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between sticky top-0 z-10">
           <div>
-            <h2>Call Activity</h2>
-            <p>Inbound lead tracking &amp; call analytics — {dateFilter}</p>
+            <h2 className="text-lg font-bold text-gray-900">Call Dashboard</h2>
+            <p className="text-sm text-gray-500">Inbound call tracking &amp; lead management</p>
           </div>
-          <div className="header-actions">
-            <button className="btn btn-outline">⬇ Export CSV</button>
-            <button className="btn btn-primary">＋ Add Number</button>
-          </div>
-        </div>
-
-        {/* Summary Cards */}
-        <div className="cards-grid">
-          <div className="card">
-            <div className="card-header">
-              <span className="card-label">Total Calls</span>
-              <span className="card-icon blue">📞</span>
-            </div>
-            <div className="card-value">{stats.total}</div>
-            <div className="card-sub">
-              Inbound calls
-              <span className="card-change up">↑ 12%</span>
+          <div className="flex items-center gap-3">
+            <div className="relative">
+              <span className="absolute inset-y-0 left-3 flex items-center"><SearchIcon/></span>
+              <input type="text" placeholder="Search name or phone..." value={search}
+                onChange={e => { setSearch(e.target.value); setPage(1); }}
+                className="pl-9 pr-4 py-2 border border-gray-200 rounded-lg text-sm w-64 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400"/>
             </div>
           </div>
+        </header>
 
-          <div className="card">
-            <div className="card-header">
-              <span className="card-label">Answer Rate</span>
-              <span className="card-icon green">✅</span>
+        <div className="p-6 space-y-6">
+          {/* Summary cards */}
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+            <SummaryCard icon={<PhoneIcon/>} label="Total Calls" value={stats.total}
+              sub={`Today: ${stats.todayCalls} · This Week: ${stats.weekCalls}`}
+              color="bg-blue-50 text-blue-600"/>
+            <SummaryCard icon={<CheckIcon/>} label="Answer Rate"
+              value={`${stats.rate}%`}
+              sub={`${stats.conn} connected of ${stats.total}`}
+              color={stats.rate >= 50 ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600'}/>
+            <SummaryCard icon={<ClockIcon/>} label="Avg Duration"
+              value={formatDuration(stats.avgDur)}
+              sub="Per call average"
+              color="bg-amber-50 text-amber-600"/>
+            <SummaryCard icon={<UsersIcon/>} label="Unique Leads"
+              value={stats.leads}
+              sub={`${stats.unique} unique callers`}
+              color="bg-purple-50 text-purple-600"/>
+          </div>
+
+          {/* Filters bar */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2 text-sm text-gray-600 font-medium">
+              <FilterIcon/> Filters
             </div>
-            <div className="card-value">{stats.answerRate}%</div>
-            <div className="card-sub">
-              {filtered.filter(c => c.connectedStatus === "connected").length} connected
-              <span className="card-change up">↑ 5%</span>
+            <select value={dateRange} onChange={e => { setDateRange(e.target.value); setPage(1); }}
+              className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20">
+              <option value="today">Today</option>
+              <option value="yesterday">Yesterday</option>
+              <option value="week">This Week</option>
+              <option value="month">This Month</option>
+            </select>
+            <select value={numberFilter} onChange={e => { setNumberFilter(e.target.value); setPage(1); }}
+              className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20">
+              <option value="">All Numbers</option>
+              {numberNames.map(n => <option key={n} value={n}>{n}</option>)}
+            </select>
+            <select value={connFilter} onChange={e => { setConnFilter(e.target.value); setPage(1); }}
+              className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20">
+              <option value="">All Calls</option>
+              <option value="connected">Connected</option>
+              <option value="missed">Not Connected</option>
+            </select>
+            {hasFilters && (
+              <button onClick={clearFilters}
+                className="ml-auto text-sm text-red-500 hover:text-red-700 font-medium transition">
+                Clear All
+              </button>
+            )}
+          </div>
+
+          {/* Charts */}
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+            <div className="xl:col-span-2 bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+              <h3 className="text-sm font-semibold text-gray-700 mb-4">Daily Call Volume</h3>
+              <ResponsiveContainer width="100%" height={250}>
+                <BarChart data={dailyData} barGap={2}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0"/>
+                  <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={v => { const parts = v.split(' '); return parts[0] + ' ' + parts[1]; }}/>
+                  <YAxis tick={{ fontSize: 11 }} allowDecimals={false}/>
+                  <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }}/>
+                  <Legend wrapperStyle={{ fontSize: 12 }}/>
+                  <Bar dataKey="connected" name="Connected" fill={COLORS.connected} radius={[3,3,0,0]} stackId="a"/>
+                  <Bar dataKey="missed" name="Missed" fill={COLORS.missed} radius={[3,3,0,0]} stackId="a"/>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+              <h3 className="text-sm font-semibold text-gray-700 mb-4">Connection Rate</h3>
+              <ResponsiveContainer width="100%" height={250}>
+                <PieChart>
+                  <Pie data={pieData} cx="50%" cy="50%" innerRadius={55} outerRadius={85} dataKey="value" paddingAngle={3}
+                    label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
+                    {pieData.map((_, i) => <Cell key={i} fill={PIE_COLORS[i]}/>)}
+                  </Pie>
+                  <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }}/>
+                </PieChart>
+              </ResponsiveContainer>
             </div>
           </div>
 
-          <div className="card">
-            <div className="card-header">
-              <span className="card-label">Avg Duration</span>
-              <span className="card-icon yellow">⏱</span>
-            </div>
-            <div className="card-value">{formatDurationAvg(stats.avgSecs)}</div>
-            <div className="card-sub">
-              Per connected call
-              <span className="card-change down">↓ 3%</span>
-            </div>
-          </div>
-
-          <div className="card">
-            <div className="card-header">
-              <span className="card-label">Unique Leads</span>
-              <span className="card-icon purple">🎯</span>
-            </div>
-            <div className="card-value">{stats.uniqueLeads}</div>
-            <div className="card-sub">
-              Unique callers (*)
-              <span className="card-change up">↑ 8%</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Filters Bar */}
-        <div className="filters-bar">
-          <div className="filter-row">
-            {/* Date pills */}
-            <div className="filter-group">
-              <div className="filter-label">Date Range</div>
-              <div className="date-pill-row">
-                {["Today","Yesterday","This Week","This Month"].map(d => (
-                  <button
-                    key={d}
-                    className={`date-pill${dateFilter === d ? " active" : ""}`}
-                    onClick={() => handleFilter(setDateFilter)(d)}
-                  >{d}</button>
-                ))}
-              </div>
-            </div>
-
-            <div className="filter-divider" />
-
-            {/* Number Name */}
-            <div className="filter-group">
-              <div className="filter-label">Tracking Number</div>
-              <select
-                value={numberFilter}
-                onChange={e => handleFilter(setNumberFilter)(e.target.value)}
-              >
-                {NUMBER_NAMES.map(n => <option key={n}>{n}</option>)}
-              </select>
-            </div>
-
-            {/* Connected */}
-            <div className="filter-group">
-              <div className="filter-label">Connection</div>
-              <select
-                value={connectedFilter}
-                onChange={e => handleFilter(setConnectedFilter)(e.target.value)}
-              >
-                <option value="All">All Statuses</option>
-                <option value="Connected">Connected</option>
-                <option value="No Connection">No Connection</option>
-              </select>
-            </div>
-
-            {/* First Time Caller */}
-            <div className="filter-group">
-              <div className="filter-label">Caller Type</div>
-              <div className="date-pill-row">
-                <button
-                  className={`date-pill${firstTimeOnly ? " active" : ""}`}
-                  onClick={() => { setFirstTimeOnly(f => !f); setPage(1); }}
-                >First Time</button>
-              </div>
-            </div>
-
-            {/* Search */}
-            <div className="filter-group" style={{ flex: 1, minWidth: 180 }}>
-              <div className="filter-label">Search</div>
-              <div className="search-wrap">
-                <span className="search-icon">🔍</span>
-                <input
-                  type="text"
-                  placeholder="Name, phone, number…"
-                  value={search}
-                  onChange={e => { setSearch(e.target.value); setPage(1); }}
-                  style={{ width: "100%" }}
-                />
-              </div>
-            </div>
-
-            <div style={{ display: "flex", alignItems: "flex-end" }}>
-              <button className="btn btn-outline" onClick={clearFilters}>✕ Clear</button>
-            </div>
-          </div>
-        </div>
-
-        {/* Charts Row 1: Daily Volume + Pie */}
-        <div className="charts-grid">
-          {/* Daily Call Volume */}
-          <div className="chart-card">
-            <div className="chart-title">Daily Call Volume</div>
-            <div className="chart-sub">Inbound calls per day, by connection status</div>
-            <div className="chart-legend">
-              <div className="legend-item">
-                <div className="legend-dot" style={{ background: "#10b981" }} />
-                Connected
-              </div>
-              <div className="legend-item">
-                <div className="legend-dot" style={{ background: "#ef4444" }} />
-                No Connection
-              </div>
-              <div className="legend-item">
-                <div className="legend-dot" style={{ background: "#6366f1" }} />
-                Unknown
-              </div>
-            </div>
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={dailyVolume} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#2e3455" vertical={false} />
-                <XAxis
-                  dataKey="dateShort"
-                  tick={{ fill: "#8892b0", fontSize: 11 }}
-                  axisLine={false} tickLine={false}
-                  interval="preserveStartEnd"
-                />
-                <YAxis
-                  tick={{ fill: "#8892b0", fontSize: 11 }}
-                  axisLine={false} tickLine={false}
-                  allowDecimals={false}
-                />
-                <Tooltip content={<BarTooltip />} cursor={{ fill: "rgba(59,130,246,.08)" }} />
-                <Bar dataKey="connected" name="Connected" stackId="a" fill="#10b981" radius={[0,0,0,0]} />
-                <Bar dataKey="missed" name="No Connection" stackId="a" fill="#ef4444" radius={[0,0,0,0]} />
-                <Bar dataKey="unknown" name="Unknown" stackId="a" fill="#6366f1" radius={[4,4,0,0]} />
+          {/* Calls by tracking number */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+            <h3 className="text-sm font-semibold text-gray-700 mb-4">Calls by Tracking Number</h3>
+            <ResponsiveContainer width="100%" height={Math.max(180, numberData.length * 36)}>
+              <BarChart data={numberData} layout="vertical" barSize={18}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0"/>
+                <XAxis type="number" tick={{ fontSize: 11 }} allowDecimals={false}/>
+                <YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} width={130}/>
+                <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }}/>
+                <Bar dataKey="count" name="Calls" fill={COLORS.blue} radius={[0,4,4,0]}/>
               </BarChart>
             </ResponsiveContainer>
           </div>
 
-          {/* Connection Rate Donut */}
-          <div className="chart-card">
-            <div className="chart-title">Connection Rate</div>
-            <div className="chart-sub">Breakdown of call outcomes</div>
-            <ResponsiveContainer width="100%" height={220}>
-              <PieChart>
-                <Pie
-                  data={pieSections}
-                  cx="50%"
-                  cy="45%"
-                  innerRadius={60}
-                  outerRadius={90}
-                  paddingAngle={3}
-                  dataKey="value"
-                >
-                  {pieSections.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.color} stroke="transparent" />
-                  ))}
-                </Pie>
-                <Tooltip content={<PieTooltip />} />
-                <Legend
-                  iconType="circle"
-                  iconSize={8}
-                  formatter={(val) => <span style={{ color: "#8892b0", fontSize: 12 }}>{val}</span>}
-                />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        {/* Charts Row 2: Calls by Tracking Number */}
-        <div className="chart-full">
-          <div className="chart-title">Calls by Tracking Number</div>
-          <div className="chart-sub">Total inbound calls vs connected calls per source</div>
-          <div className="chart-legend">
-            <div className="legend-item">
-              <div className="legend-dot" style={{ background: "#3b82f6" }} />
-              Total Calls
+          {/* Call log table */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-gray-700">Call Log</h3>
+              <span className="text-xs text-gray-400">{filtered.length} calls</span>
             </div>
-            <div className="legend-item">
-              <div className="legend-dot" style={{ background: "#10b981" }} />
-              Connected
-            </div>
-          </div>
-          <ResponsiveContainer width="100%" height={200}>
-            <BarChart
-              data={byNumber}
-              margin={{ top: 0, right: 0, left: -20, bottom: 0 }}
-              layout="horizontal"
-            >
-              <CartesianGrid strokeDasharray="3 3" stroke="#2e3455" vertical={false} />
-              <XAxis
-                dataKey="name"
-                tick={{ fill: "#8892b0", fontSize: 11 }}
-                axisLine={false} tickLine={false}
-              />
-              <YAxis
-                tick={{ fill: "#8892b0", fontSize: 11 }}
-                axisLine={false} tickLine={false}
-                allowDecimals={false}
-              />
-              <Tooltip content={<NumberTooltip />} cursor={{ fill: "rgba(59,130,246,.08)" }} />
-              <Bar dataKey="calls" name="Total Calls" fill="#3b82f6" radius={[4,4,0,0]} />
-              <Bar dataKey="connected" name="Connected" fill="#10b981" radius={[4,4,0,0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* Call Log Table */}
-        <div>
-          <div className="section-header">
-            <div style={{ display: "flex", alignItems: "center" }}>
-              <span className="section-title">Call Log</span>
-              <span className="section-count">{filtered.length} calls</span>
-            </div>
-            <div style={{ display: "flex", gap: "8px" }}>
-              <button className="btn btn-outline">↕ Sort</button>
-              <button className="btn btn-outline">⚙ Columns</button>
-            </div>
-          </div>
-
-          <div className="table-wrap">
-            {filtered.length === 0 ? (
-              <div className="empty-state">
-                <div className="empty-icon">📭</div>
-                <p>No calls match your filters.</p>
-              </div>
-            ) : (
-              <React.Fragment>
-                <table>
-                  <thead>
-                    <tr>
-                      <th className="sortable">Date / Time <span className="sort-arrow">↕</span></th>
-                      <th>Contact Name</th>
-                      <th>Caller Phone</th>
-                      <th>Number Name</th>
-                      <th>Connected</th>
-                      <th>Duration</th>
-                      <th>Recording</th>
-                      <th>Pipeline / Stage</th>
-                      <th>Next Contact</th>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-50 text-left">
+                    <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Date & Time</th>
+                    <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Contact</th>
+                    <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Caller Phone</th>
+                    <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Number Name</th>
+                    <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Connected</th>
+                    <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Duration</th>
+                    <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Recording</th>
+                    <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Pipeline & Stage</th>
+                    <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Next Contact</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {paged.map(c => (
+                    <tr key={c.id} className="hover:bg-gray-50/50 transition">
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        <div className="text-gray-900 font-medium">{c.dateStr}</div>
+                        <div className="text-gray-400 text-xs">{c.timeStr}</div>
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        <div className="flex items-center gap-2">
+                          <span className="text-gray-900">{c.name}</span>
+                          {c.isLead && <Badge color="blue">LEAD</Badge>}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap mono text-gray-600">{c.callerPhone}</td>
+                      <td className="px-4 py-3 whitespace-nowrap text-gray-600">{c.numberName}</td>
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        {c.connected ? <Badge color="green">Yes</Badge> : <Badge color="red">No</Badge>}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-gray-600">{c.duration}</td>
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        {c.recording === 'Recording' ? <Badge color="purple">Recording</Badge> : <span className="text-gray-400 text-xs">—</span>}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        {c.pipeline !== 'N/A' ? (
+                          <span className="text-sm">
+                            <span className="text-blue-600 font-medium">Seller Lead</span>
+                            <span className="text-gray-400 mx-1">&rsaquo;</span>
+                            <span className="text-gray-600">Qualified</span>
+                          </span>
+                        ) : <span className="text-gray-400 text-xs">N/A</span>}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        {c.nextContact !== 'N/A' ? (
+                          <Badge color="amber">{c.nextContact}</Badge>
+                        ) : <span className="text-gray-400 text-xs">N/A</span>}
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {paginated.map(c => (
-                      <tr key={c.id}>
-                        <td>
-                          <div style={{ fontWeight: 600, fontSize: 12 }}>{c.date}</div>
-                          <div style={{ color: "var(--text-muted)", fontSize: 11 }}>{c.time}</div>
-                        </td>
-                        <td>
-                          <ContactName name={c.contactName} lead={c.isLead} />
-                        </td>
-                        <td className="mono">{c.callerPhone}</td>
-                        <td>
-                          <span style={{ color: "var(--text-muted)", fontSize: 12 }}>{c.numberName}</span>
-                        </td>
-                        <td><ConnectedBadge status={c.connectedStatus} /></td>
-                        <td className="muted" style={{ fontVariantNumeric: "tabular-nums" }}>
-                          {c.duration === "0s" ? <span style={{ color: "var(--text-dim)" }}>—</span> : c.duration}
-                        </td>
-                        <td><RecordingBadge val={c.recording} /></td>
-                        <td>
-                          {c.pipeline === "N/A"
-                            ? <span style={{ color: "var(--text-dim)" }}>N/A</span>
-                            : <span style={{ color: "var(--blue)", fontSize: 12 }}>{c.pipeline}</span>
-                          }
-                        </td>
-                        <td className="muted" style={{ fontSize: 12, whiteSpace: "nowrap" }}>
-                          {c.nextContact === "N/A"
-                            ? <span style={{ color: "var(--text-dim)" }}>N/A</span>
-                            : c.nextContact
-                          }
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                  ))}
+                </tbody>
+              </table>
+            </div>
 
-                {/* Pagination */}
-                {totalPages > 1 && (
-                  <div className="pagination">
-                    <div className="pagination-info">
-                      Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, filtered.length)} of {filtered.length} calls
-                    </div>
-                    <div className="pagination-controls">
-                      <button
-                        className="page-btn"
-                        onClick={() => setPage(p => Math.max(1, p - 1))}
-                        disabled={page === 1}
-                      >‹</button>
-                      {Array.from({ length: totalPages }, (_, i) => i + 1).map(p => (
-                        <button
-                          key={p}
-                          className={`page-btn${p === page ? " active" : ""}`}
-                          onClick={() => setPage(p)}
-                        >{p}</button>
-                      ))}
-                      <button
-                        className="page-btn"
-                        onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-                        disabled={page === totalPages}
-                      >›</button>
-                    </div>
-                  </div>
-                )}
-              </React.Fragment>
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-between">
+                <p className="text-xs text-gray-500">
+                  Showing {(page-1)*perPage+1}–{Math.min(page*perPage, filtered.length)} of {filtered.length}
+                </p>
+                <div className="flex items-center gap-1">
+                  <button onClick={() => setPage(Math.max(1, page-1))} disabled={page === 1}
+                    className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition">
+                    Prev
+                  </button>
+                  {Array.from({ length: totalPages }, (_, i) => (
+                    <button key={i} onClick={() => setPage(i+1)}
+                      className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition ${page === i+1 ? 'bg-blue-500 text-white border-blue-500' : 'border-gray-200 hover:bg-gray-50'}`}>
+                      {i+1}
+                    </button>
+                  ))}
+                  <button onClick={() => setPage(Math.min(totalPages, page+1))} disabled={page === totalPages}
+                    className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition">
+                    Next
+                  </button>
+                </div>
+              </div>
             )}
           </div>
         </div>
       </main>
-    </React.Fragment>
+    </div>
   );
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
 </script>
 </body>
 </html>
