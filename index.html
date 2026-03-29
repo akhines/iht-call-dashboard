@@ -20,21 +20,19 @@
 </style>
 <script>
 tailwind.config = {
-  theme: {
-    extend: {
-      colors: {
-        navy: { DEFAULT: '#1a1f36', light: '#242b4a', lighter: '#2d355e' }
-      }
-    }
-  }
+  theme: { extend: { colors: { navy: { DEFAULT: '#1a1f36', light: '#242b4a', lighter: '#2d355e' } } } }
 }
 </script>
 </head>
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const { useState, useMemo, useCallback } = React;
+const { useState, useMemo } = React;
 const { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } = Recharts;
+
+// ========== CONFIGURE YOUR GHL LINK HERE ==========
+const GHL_BASE = "https://app.gohighlevel.com/v2/location/Js1OZngrzWeqSwiHjbRx/contacts";
+// ===================================================
 
 const CALL_DATA = [
   ["Mar 28 2026","06:20 PM","Unknown","+1 443-554-5766","+1 410-824-1687","Web Leads (SEO)","","39s","-","Unknown","","No Recording"],
@@ -69,363 +67,175 @@ const CALL_DATA = [
   ["Mar 5 2026","11:45 AM","*Patricia White","+1 410-555-4567","+1 410-264-1642","Google Ads","Connected","3m 05s","Connected","Unknown","","Recording"]
 ];
 
-function parseDate(dateStr, timeStr) {
-  return new Date(dateStr + ' ' + timeStr);
+function parseDate(ds, ts) { return new Date(ds + ' ' + ts); }
+function parseDuration(d) {
+  if (!d || d === '0s') return 0;
+  let t = 0; const m = d.match(/(\d+)m/), s = d.match(/(\d+)s/);
+  if (m) t += parseInt(m[1])*60; if (s) t += parseInt(s[1]); return t;
+}
+function fmtDur(s) { if (!s) return '0s'; const m=Math.floor(s/60),r=s%60; return m?`${m}m ${r}s`:`${r}s`; }
+function isLead(n) { const t=n.trim(); return t!=='Unknown' && !t.toUpperCase().startsWith('NOT A LEAD') && t.startsWith('*'); }
+function cleanName(n) { let t=n.trim(); return t.startsWith('*')?t.substring(1):t; }
+function isConn(r) { return r[6]==='Connected'||r[8]==='Connected'; }
+function ghlLink(phone) { const digits = phone.replace(/\D/g,''); return GHL_BASE + '?query=' + encodeURIComponent(digits); }
+
+const calls = CALL_DATA.map((r,i) => ({
+  id:i, date:parseDate(r[0],r[1]), dateStr:r[0], timeStr:r[1], rawName:r[2],
+  name:cleanName(r[2]), callerPhone:r[3], dialedNumber:r[4], numberName:r[5],
+  duration:r[7], durationSecs:parseDuration(r[7]), connected:isConn(r),
+  isLead:isLead(r[2]), recording:r[11]
+}));
+
+const numberNames = [...new Set(calls.map(c=>c.numberName))].sort();
+
+const PhoneIcon=()=><svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"/></svg>;
+const ChartIcon=()=><svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>;
+const UsersIcon=()=><svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>;
+const SearchIcon=()=><svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>;
+const FilterIcon=()=><svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/></svg>;
+const ClockIcon=()=><svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>;
+const CheckIcon=()=><svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>;
+const PlayIcon=()=><svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>;
+const LinkIcon=()=><svg className="w-3 h-3 inline ml-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>;
+
+function Card({icon,label,value,sub,color}) {
+  return <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 flex items-start gap-4">
+    <div className={`p-3 rounded-lg ${color}`}>{icon}</div>
+    <div><p className="text-sm text-gray-500 font-medium">{label}</p>
+    <p className="text-2xl font-bold text-gray-900 mt-0.5">{value}</p>
+    {sub && <p className="text-xs text-gray-400 mt-1">{sub}</p>}</div>
+  </div>;
 }
 
-function parseDuration(dur) {
-  if (!dur || dur === '0s') return 0;
-  let total = 0;
-  const mMatch = dur.match(/(\d+)m/);
-  const sMatch = dur.match(/(\d+)s/);
-  if (mMatch) total += parseInt(mMatch[1]) * 60;
-  if (sMatch) total += parseInt(sMatch[1]);
-  return total;
-}
-
-function formatDuration(secs) {
-  if (secs === 0) return '0s';
-  const m = Math.floor(secs / 60);
-  const s = secs % 60;
-  return m > 0 ? `${m}m ${s}s` : `${s}s`;
-}
-
-function isLead(name) {
-  const n = name.trim();
-  if (n === 'Unknown' || n.toUpperCase().startsWith('NOT A LEAD')) return false;
-  return n.startsWith('*');
-}
-
-function cleanName(name) {
-  let n = name.trim();
-  if (n.startsWith('*')) n = n.substring(1);
-  return n;
-}
-
-function isConnected(row) {
-  return row[6] === 'Connected' || row[8] === 'Connected';
-}
-
-function addDays(date, days) {
-  const d = new Date(date);
-  d.setDate(d.getDate() + days);
-  return d;
-}
-
-function fmtShortDate(d) {
-  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  return `${months[d.getMonth()]} ${d.getDate()}`;
-}
-
-const calls = CALL_DATA.map((row, i) => {
-  const date = parseDate(row[0], row[1]);
-  const lead = isLead(row[2]);
-  const connected = isConnected(row);
-  const durSecs = parseDuration(row[7]);
-  const nextDate = lead ? addDays(date, 2 + (i % 2)) : null;
-  return {
-    id: i,
-    date,
-    dateStr: row[0],
-    timeStr: row[1],
-    rawName: row[2],
-    name: cleanName(row[2]),
-    callerPhone: row[3],
-    dialedNumber: row[4],
-    numberName: row[5],
-    connectedRaw: row[6],
-    duration: row[7],
-    durationSecs: durSecs,
-    connectionStatus: row[8],
-    connected,
-    isLead: lead,
-    recording: row[11],
-    pipeline: lead ? 'Seller Lead > Qualified' : 'N/A',
-    nextContact: nextDate ? `${fmtShortDate(nextDate)}` : 'N/A'
+function Badge({children,color,onClick,href}) {
+  const cls = {
+    green:'bg-emerald-50 text-emerald-700 border-emerald-200',
+    red:'bg-red-50 text-red-700 border-red-200',
+    blue:'bg-blue-50 text-blue-700 border-blue-200',
+    purple:'bg-purple-50 text-purple-700 border-purple-200',
+    gray:'bg-gray-50 text-gray-500 border-gray-200',
+    amber:'bg-amber-50 text-amber-700 border-amber-200',
   };
-});
-
-const numberNames = [...new Set(calls.map(c => c.numberName))].sort();
-
-// Icons
-const PhoneIcon = () => (
-  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"/>
-  </svg>
-);
-const ChartIcon = () => (
-  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
-  </svg>
-);
-const UsersIcon = () => (
-  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/>
-  </svg>
-);
-const SearchIcon = () => (
-  <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
-  </svg>
-);
-const FilterIcon = () => (
-  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/>
-  </svg>
-);
-const ClockIcon = () => (
-  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
-  </svg>
-);
-const CheckIcon = () => (
-  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
-  </svg>
-);
-
-function SummaryCard({ icon, label, value, sub, color }) {
-  return (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 flex items-start gap-4">
-      <div className={`p-3 rounded-lg ${color}`}>{icon}</div>
-      <div>
-        <p className="text-sm text-gray-500 font-medium">{label}</p>
-        <p className="text-2xl font-bold text-gray-900 mt-0.5">{value}</p>
-        {sub && <p className="text-xs text-gray-400 mt-1">{sub}</p>}
-      </div>
-    </div>
-  );
+  const base = `inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${cls[color]||cls.gray}`;
+  if (href) return <a href={href} target="_blank" rel="noopener" className={`${base} hover:opacity-80 cursor-pointer no-underline`}>{children}</a>;
+  return <span className={base}>{children}</span>;
 }
 
-function Badge({ children, color }) {
-  const colors = {
-    green: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-    red: 'bg-red-50 text-red-700 border-red-200',
-    blue: 'bg-blue-50 text-blue-700 border-blue-200',
-    purple: 'bg-purple-50 text-purple-700 border-purple-200',
-    gray: 'bg-gray-50 text-gray-500 border-gray-200',
-    amber: 'bg-amber-50 text-amber-700 border-amber-200',
-  };
-  return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${colors[color] || colors.gray}`}>
-      {children}
-    </span>
-  );
-}
-
-const COLORS = { connected: '#10b981', missed: '#ef4444', blue: '#3b82f6' };
-const PIE_COLORS = ['#10b981', '#ef4444'];
+const COLORS = {connected:'#10b981',missed:'#ef4444',blue:'#3b82f6'};
+const PIE_COLORS = ['#10b981','#ef4444'];
 
 function App() {
-  const [dateRange, setDateRange] = useState('month');
-  const [numberFilter, setNumberFilter] = useState('');
-  const [connFilter, setConnFilter] = useState('');
-  const [search, setSearch] = useState('');
-  const [page, setPage] = useState(1);
-  const [sidebarTab, setSidebarTab] = useState('dashboard');
-  const perPage = 10;
+  const [dateRange,setDateRange]=useState('month');
+  const [numberFilter,setNumberFilter]=useState('');
+  const [connFilter,setConnFilter]=useState('');
+  const [search,setSearch]=useState('');
+  const [page,setPage]=useState(1);
+  const perPage=10;
+  const now=new Date('2026-03-29T00:00:00');
 
-  const now = new Date('2026-03-29T00:00:00');
+  const filtered=useMemo(()=>calls.filter(c=>{
+    const diff=(now-c.date)/(1000*60*60*24);
+    if(dateRange==='today'&&diff>1) return false;
+    if(dateRange==='yesterday'&&(diff<1||diff>2)) return false;
+    if(dateRange==='week'&&diff>7) return false;
+    if(dateRange==='month'&&diff>31) return false;
+    if(numberFilter&&c.numberName!==numberFilter) return false;
+    if(connFilter==='connected'&&!c.connected) return false;
+    if(connFilter==='missed'&&c.connected) return false;
+    if(search){const s=search.toLowerCase();if(!c.name.toLowerCase().includes(s)&&!c.callerPhone.includes(s)) return false;}
+    return true;
+  }),[dateRange,numberFilter,connFilter,search]);
 
-  const filtered = useMemo(() => {
-    return calls.filter(c => {
-      // Date range
-      const diff = (now - c.date) / (1000*60*60*24);
-      if (dateRange === 'today' && diff > 1) return false;
-      if (dateRange === 'yesterday' && (diff < 1 || diff > 2)) return false;
-      if (dateRange === 'week' && diff > 7) return false;
-      if (dateRange === 'month' && diff > 31) return false;
+  const stats=useMemo(()=>{
+    const t=filtered.length,cn=filtered.filter(c=>c.connected).length;
+    const rate=t?Math.round(cn/t*100):0;
+    const td=filtered.reduce((a,c)=>a+c.durationSecs,0);
+    const avg=t?Math.round(td/t):0;
+    const leads=filtered.filter(c=>c.isLead).length;
+    const uq=new Set(filtered.map(c=>c.callerPhone)).size;
+    const today=filtered.filter(c=>(now-c.date)/(1000*60*60*24)<1).length;
+    const week=filtered.filter(c=>(now-c.date)/(1000*60*60*24)<7).length;
+    return {total:t,conn:cn,rate,avgDur:avg,leads,unique:uq,todayCalls:today,weekCalls:week};
+  },[filtered]);
 
-      if (numberFilter && c.numberName !== numberFilter) return false;
-      if (connFilter === 'connected' && !c.connected) return false;
-      if (connFilter === 'missed' && c.connected) return false;
+  const dailyData=useMemo(()=>{
+    const m={};filtered.forEach(c=>{const k=c.dateStr;if(!m[k])m[k]={date:k,connected:0,missed:0};c.connected?m[k].connected++:m[k].missed++;});
+    return Object.values(m).sort((a,b)=>new Date(a.date)-new Date(b.date));
+  },[filtered]);
 
-      if (search) {
-        const s = search.toLowerCase();
-        if (!c.name.toLowerCase().includes(s) && !c.callerPhone.includes(s)) return false;
-      }
-      return true;
-    });
-  }, [dateRange, numberFilter, connFilter, search]);
+  const pieData=useMemo(()=>[{name:'Connected',value:stats.conn},{name:'Missed',value:stats.total-stats.conn}],[stats]);
 
-  const stats = useMemo(() => {
-    const total = filtered.length;
-    const conn = filtered.filter(c => c.connected).length;
-    const rate = total > 0 ? Math.round((conn / total) * 100) : 0;
-    const totalDur = filtered.reduce((a, c) => a + c.durationSecs, 0);
-    const avgDur = total > 0 ? Math.round(totalDur / total) : 0;
-    const leads = filtered.filter(c => c.isLead).length;
-    const phones = new Set(filtered.map(c => c.callerPhone));
-    const todayCalls = filtered.filter(c => (now - c.date) / (1000*60*60*24) < 1).length;
-    const weekCalls = filtered.filter(c => (now - c.date) / (1000*60*60*24) < 7).length;
-    return { total, conn, rate, avgDur, leads, unique: phones.size, todayCalls, weekCalls };
-  }, [filtered]);
+  const numberData=useMemo(()=>{
+    const m={};filtered.forEach(c=>{m[c.numberName]=(m[c.numberName]||0)+1;});
+    return Object.entries(m).map(([n,ct])=>({name:n,count:ct})).sort((a,b)=>b.count-a.count);
+  },[filtered]);
 
-  // Charts data
-  const dailyData = useMemo(() => {
-    const map = {};
-    filtered.forEach(c => {
-      const key = c.dateStr;
-      if (!map[key]) map[key] = { date: key, connected: 0, missed: 0 };
-      c.connected ? map[key].connected++ : map[key].missed++;
-    });
-    return Object.values(map).sort((a, b) => new Date(a.date) - new Date(b.date));
-  }, [filtered]);
-
-  const pieData = useMemo(() => [
-    { name: 'Connected', value: stats.conn },
-    { name: 'Missed', value: stats.total - stats.conn }
-  ], [stats]);
-
-  const numberData = useMemo(() => {
-    const map = {};
-    filtered.forEach(c => {
-      if (!map[c.numberName]) map[c.numberName] = 0;
-      map[c.numberName]++;
-    });
-    return Object.entries(map).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
-  }, [filtered]);
-
-  const totalPages = Math.ceil(filtered.length / perPage);
-  const paged = filtered.slice((page - 1) * perPage, page * perPage);
-
-  const clearFilters = () => {
-    setDateRange('month');
-    setNumberFilter('');
-    setConnFilter('');
-    setSearch('');
-    setPage(1);
-  };
-
-  const hasFilters = dateRange !== 'month' || numberFilter || connFilter || search;
+  const totalPages=Math.ceil(filtered.length/perPage);
+  const paged=filtered.slice((page-1)*perPage,page*perPage);
+  const clearFilters=()=>{setDateRange('month');setNumberFilter('');setConnFilter('');setSearch('');setPage(1);};
+  const hasFilters=dateRange!=='month'||numberFilter||connFilter||search;
 
   return (
     <div className="flex h-screen overflow-hidden">
       {/* Sidebar */}
-      <aside className="w-60 flex-shrink-0 flex flex-col" style={{ background: '#1a1f36' }}>
+      <aside className="w-60 flex-shrink-0 flex flex-col" style={{background:'#1a1f36'}}>
         <div className="p-5 border-b border-white/10">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-lg bg-blue-500 flex items-center justify-center">
-              <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/>
-              </svg>
+              <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
             </div>
-            <div>
-              <h1 className="text-white font-bold text-sm leading-tight">Impact Home</h1>
-              <p className="text-blue-300 text-xs">Call Tracking</p>
-            </div>
+            <div><h1 className="text-white font-bold text-sm leading-tight">Impact Home</h1><p className="text-blue-300 text-xs">Call Tracking</p></div>
           </div>
         </div>
-
         <nav className="flex-1 p-3 space-y-1">
-          <button onClick={() => setSidebarTab('dashboard')}
-            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition ${sidebarTab === 'dashboard' ? 'bg-white/10 text-white' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}>
-            <ChartIcon /> Dashboard
-          </button>
-          <button onClick={() => setSidebarTab('dashboard')}
-            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-400 hover:text-white hover:bg-white/5 transition">
-            <PhoneIcon /> Call Log
-          </button>
-          <button onClick={() => setSidebarTab('dashboard')}
-            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-400 hover:text-white hover:bg-white/5 transition">
-            <UsersIcon /> Leads
-          </button>
-
-          <div className="pt-4 pb-2 px-3">
-            <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Quick Filters</p>
-          </div>
-          {[['today','Today'],['yesterday','Yesterday'],['week','This Week'],['month','This Month']].map(([val, label]) => (
-            <button key={val} onClick={() => { setDateRange(val); setPage(1); }}
-              className={`w-full text-left px-3 py-2 rounded-lg text-sm transition ${dateRange === val ? 'bg-blue-500/20 text-blue-300 font-medium' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}>
-              {label}
-            </button>
-          ))}
-
-          <div className="pt-4 pb-2 px-3">
-            <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Connection</p>
-          </div>
-          <button onClick={() => { setConnFilter(connFilter === 'connected' ? '' : 'connected'); setPage(1); }}
-            className={`w-full text-left px-3 py-2 rounded-lg text-sm transition flex items-center gap-2 ${connFilter === 'connected' ? 'bg-emerald-500/20 text-emerald-300' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}>
-            <span className="w-2 h-2 rounded-full bg-emerald-400"></span> Connected
-          </button>
-          <button onClick={() => { setConnFilter(connFilter === 'missed' ? '' : 'missed'); setPage(1); }}
-            className={`w-full text-left px-3 py-2 rounded-lg text-sm transition flex items-center gap-2 ${connFilter === 'missed' ? 'bg-red-500/20 text-red-300' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}>
-            <span className="w-2 h-2 rounded-full bg-red-400"></span> Not Connected
-          </button>
+          <button className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium bg-white/10 text-white"><ChartIcon/> Dashboard</button>
+          <button className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-400 hover:text-white hover:bg-white/5"><PhoneIcon/> Call Log</button>
+          <button className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-400 hover:text-white hover:bg-white/5"><UsersIcon/> Leads</button>
+          <div className="pt-4 pb-2 px-3"><p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Quick Filters</p></div>
+          {[['today','Today'],['yesterday','Yesterday'],['week','This Week'],['month','This Month']].map(([v,l])=>
+            <button key={v} onClick={()=>{setDateRange(v);setPage(1);}} className={`w-full text-left px-3 py-2 rounded-lg text-sm transition ${dateRange===v?'bg-blue-500/20 text-blue-300 font-medium':'text-gray-400 hover:text-white hover:bg-white/5'}`}>{l}</button>
+          )}
+          <div className="pt-4 pb-2 px-3"><p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Connection</p></div>
+          <button onClick={()=>{setConnFilter(connFilter==='connected'?'':'connected');setPage(1);}} className={`w-full text-left px-3 py-2 rounded-lg text-sm transition flex items-center gap-2 ${connFilter==='connected'?'bg-emerald-500/20 text-emerald-300':'text-gray-400 hover:text-white hover:bg-white/5'}`}><span className="w-2 h-2 rounded-full bg-emerald-400"></span> Connected</button>
+          <button onClick={()=>{setConnFilter(connFilter==='missed'?'':'missed');setPage(1);}} className={`w-full text-left px-3 py-2 rounded-lg text-sm transition flex items-center gap-2 ${connFilter==='missed'?'bg-red-500/20 text-red-300':'text-gray-400 hover:text-white hover:bg-white/5'}`}><span className="w-2 h-2 rounded-full bg-red-400"></span> Not Connected</button>
         </nav>
-
-        <div className="p-4 border-t border-white/10">
-          <p className="text-gray-500 text-xs text-center">Impact Home Team &copy; 2026</p>
-        </div>
+        <div className="p-4 border-t border-white/10"><p className="text-gray-500 text-xs text-center">Impact Home Team &copy; 2026</p></div>
       </aside>
 
-      {/* Main content */}
+      {/* Main */}
       <main className="flex-1 overflow-y-auto bg-gray-50">
-        {/* Top bar */}
         <header className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between sticky top-0 z-10">
-          <div>
-            <h2 className="text-lg font-bold text-gray-900">Call Dashboard</h2>
-            <p className="text-sm text-gray-500">Inbound call tracking &amp; lead management</p>
-          </div>
-          <div className="flex items-center gap-3">
-            <div className="relative">
-              <span className="absolute inset-y-0 left-3 flex items-center"><SearchIcon/></span>
-              <input type="text" placeholder="Search name or phone..." value={search}
-                onChange={e => { setSearch(e.target.value); setPage(1); }}
-                className="pl-9 pr-4 py-2 border border-gray-200 rounded-lg text-sm w-64 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400"/>
-            </div>
+          <div><h2 className="text-lg font-bold text-gray-900">Call Dashboard</h2><p className="text-sm text-gray-500">Inbound call tracking &amp; lead management</p></div>
+          <div className="relative">
+            <span className="absolute inset-y-0 left-3 flex items-center"><SearchIcon/></span>
+            <input type="text" placeholder="Search name or phone..." value={search} onChange={e=>{setSearch(e.target.value);setPage(1);}}
+              className="pl-9 pr-4 py-2 border border-gray-200 rounded-lg text-sm w-64 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400"/>
           </div>
         </header>
 
         <div className="p-6 space-y-6">
-          {/* Summary cards */}
+          {/* Summary */}
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-            <SummaryCard icon={<PhoneIcon/>} label="Total Calls" value={stats.total}
-              sub={`Today: ${stats.todayCalls} · This Week: ${stats.weekCalls}`}
-              color="bg-blue-50 text-blue-600"/>
-            <SummaryCard icon={<CheckIcon/>} label="Answer Rate"
-              value={`${stats.rate}%`}
-              sub={`${stats.conn} connected of ${stats.total}`}
-              color={stats.rate >= 50 ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600'}/>
-            <SummaryCard icon={<ClockIcon/>} label="Avg Duration"
-              value={formatDuration(stats.avgDur)}
-              sub="Per call average"
-              color="bg-amber-50 text-amber-600"/>
-            <SummaryCard icon={<UsersIcon/>} label="Unique Leads"
-              value={stats.leads}
-              sub={`${stats.unique} unique callers`}
-              color="bg-purple-50 text-purple-600"/>
+            <Card icon={<PhoneIcon/>} label="Total Calls" value={stats.total} sub={`Today: ${stats.todayCalls} · This Week: ${stats.weekCalls}`} color="bg-blue-50 text-blue-600"/>
+            <Card icon={<CheckIcon/>} label="Answer Rate" value={`${stats.rate}%`} sub={`${stats.conn} connected of ${stats.total}`} color={stats.rate>=50?'bg-emerald-50 text-emerald-600':'bg-red-50 text-red-600'}/>
+            <Card icon={<ClockIcon/>} label="Avg Duration" value={fmtDur(stats.avgDur)} sub="Per call average" color="bg-amber-50 text-amber-600"/>
+            <Card icon={<UsersIcon/>} label="Unique Leads" value={stats.leads} sub={`${stats.unique} unique callers`} color="bg-purple-50 text-purple-600"/>
           </div>
 
-          {/* Filters bar */}
+          {/* Filters */}
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-2 text-sm text-gray-600 font-medium">
-              <FilterIcon/> Filters
-            </div>
-            <select value={dateRange} onChange={e => { setDateRange(e.target.value); setPage(1); }}
-              className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20">
-              <option value="today">Today</option>
-              <option value="yesterday">Yesterday</option>
-              <option value="week">This Week</option>
-              <option value="month">This Month</option>
+            <div className="flex items-center gap-2 text-sm text-gray-600 font-medium"><FilterIcon/> Filters</div>
+            <select value={dateRange} onChange={e=>{setDateRange(e.target.value);setPage(1);}} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20">
+              <option value="today">Today</option><option value="yesterday">Yesterday</option><option value="week">This Week</option><option value="month">This Month</option>
             </select>
-            <select value={numberFilter} onChange={e => { setNumberFilter(e.target.value); setPage(1); }}
-              className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20">
+            <select value={numberFilter} onChange={e=>{setNumberFilter(e.target.value);setPage(1);}} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20">
               <option value="">All Numbers</option>
-              {numberNames.map(n => <option key={n} value={n}>{n}</option>)}
+              {numberNames.map(n=><option key={n} value={n}>{n}</option>)}
             </select>
-            <select value={connFilter} onChange={e => { setConnFilter(e.target.value); setPage(1); }}
-              className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20">
-              <option value="">All Calls</option>
-              <option value="connected">Connected</option>
-              <option value="missed">Not Connected</option>
+            <select value={connFilter} onChange={e=>{setConnFilter(e.target.value);setPage(1);}} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20">
+              <option value="">All Calls</option><option value="connected">Connected</option><option value="missed">Not Connected</option>
             </select>
-            {hasFilters && (
-              <button onClick={clearFilters}
-                className="ml-auto text-sm text-red-500 hover:text-red-700 font-medium transition">
-                Clear All
-              </button>
-            )}
+            {hasFilters && <button onClick={clearFilters} className="ml-auto text-sm text-red-500 hover:text-red-700 font-medium">Clear All</button>}
           </div>
 
           {/* Charts */}
@@ -434,46 +244,33 @@ function App() {
               <h3 className="text-sm font-semibold text-gray-700 mb-4">Daily Call Volume</h3>
               <ResponsiveContainer width="100%" height={250}>
                 <BarChart data={dailyData} barGap={2}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0"/>
-                  <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={v => { const parts = v.split(' '); return parts[0] + ' ' + parts[1]; }}/>
-                  <YAxis tick={{ fontSize: 11 }} allowDecimals={false}/>
-                  <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }}/>
-                  <Legend wrapperStyle={{ fontSize: 12 }}/>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0"/><XAxis dataKey="date" tick={{fontSize:11}} tickFormatter={v=>{const p=v.split(' ');return p[0]+' '+p[1];}}/><YAxis tick={{fontSize:11}} allowDecimals={false}/>
+                  <Tooltip contentStyle={{fontSize:12,borderRadius:8}}/><Legend wrapperStyle={{fontSize:12}}/>
                   <Bar dataKey="connected" name="Connected" fill={COLORS.connected} radius={[3,3,0,0]} stackId="a"/>
                   <Bar dataKey="missed" name="Missed" fill={COLORS.missed} radius={[3,3,0,0]} stackId="a"/>
                 </BarChart>
               </ResponsiveContainer>
             </div>
-
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
               <h3 className="text-sm font-semibold text-gray-700 mb-4">Connection Rate</h3>
               <ResponsiveContainer width="100%" height={250}>
-                <PieChart>
-                  <Pie data={pieData} cx="50%" cy="50%" innerRadius={55} outerRadius={85} dataKey="value" paddingAngle={3}
-                    label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
-                    {pieData.map((_, i) => <Cell key={i} fill={PIE_COLORS[i]}/>)}
-                  </Pie>
-                  <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }}/>
-                </PieChart>
+                <PieChart><Pie data={pieData} cx="50%" cy="50%" innerRadius={55} outerRadius={85} dataKey="value" paddingAngle={3} label={({name,percent})=>`${name} ${(percent*100).toFixed(0)}%`}>{pieData.map((_,i)=><Cell key={i} fill={PIE_COLORS[i]}/>)}</Pie><Tooltip contentStyle={{fontSize:12,borderRadius:8}}/></PieChart>
               </ResponsiveContainer>
             </div>
           </div>
 
-          {/* Calls by tracking number */}
+          {/* Calls by number */}
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
             <h3 className="text-sm font-semibold text-gray-700 mb-4">Calls by Tracking Number</h3>
-            <ResponsiveContainer width="100%" height={Math.max(180, numberData.length * 36)}>
+            <ResponsiveContainer width="100%" height={Math.max(180,numberData.length*36)}>
               <BarChart data={numberData} layout="vertical" barSize={18}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0"/>
-                <XAxis type="number" tick={{ fontSize: 11 }} allowDecimals={false}/>
-                <YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} width={130}/>
-                <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }}/>
-                <Bar dataKey="count" name="Calls" fill={COLORS.blue} radius={[0,4,4,0]}/>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0"/><XAxis type="number" tick={{fontSize:11}} allowDecimals={false}/><YAxis type="category" dataKey="name" tick={{fontSize:11}} width={130}/>
+                <Tooltip contentStyle={{fontSize:12,borderRadius:8}}/><Bar dataKey="count" name="Calls" fill={COLORS.blue} radius={[0,4,4,0]}/>
               </BarChart>
             </ResponsiveContainer>
           </div>
 
-          {/* Call log table */}
+          {/* Call Log */}
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
             <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
               <h3 className="text-sm font-semibold text-gray-700">Call Log</h3>
@@ -481,82 +278,46 @@ function App() {
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-gray-50 text-left">
-                    <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Date & Time</th>
-                    <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Contact</th>
-                    <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Caller Phone</th>
-                    <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Number Name</th>
-                    <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Connected</th>
-                    <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Duration</th>
-                    <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Recording</th>
-                    <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Pipeline & Stage</th>
-                    <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Next Contact</th>
-                  </tr>
-                </thead>
+                <thead><tr className="bg-gray-50 text-left">
+                  <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Date & Time</th>
+                  <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Contact</th>
+                  <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Caller Phone</th>
+                  <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Number Name</th>
+                  <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Connected</th>
+                  <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Duration</th>
+                  <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Recording</th>
+                </tr></thead>
                 <tbody className="divide-y divide-gray-50">
-                  {paged.map(c => (
+                  {paged.map(c=>(
                     <tr key={c.id} className="hover:bg-gray-50/50 transition">
-                      <td className="px-4 py-3 whitespace-nowrap">
-                        <div className="text-gray-900 font-medium">{c.dateStr}</div>
-                        <div className="text-gray-400 text-xs">{c.timeStr}</div>
-                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap"><div className="text-gray-900 font-medium">{c.dateStr}</div><div className="text-gray-400 text-xs">{c.timeStr}</div></td>
                       <td className="px-4 py-3 whitespace-nowrap">
                         <div className="flex items-center gap-2">
-                          <span className="text-gray-900">{c.name}</span>
+                          <a href={ghlLink(c.callerPhone)} target="_blank" rel="noopener" className="text-blue-600 hover:text-blue-800 hover:underline font-medium">{c.name}<LinkIcon/></a>
                           {c.isLead && <Badge color="blue">LEAD</Badge>}
                         </div>
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap mono text-gray-600">{c.callerPhone}</td>
                       <td className="px-4 py-3 whitespace-nowrap text-gray-600">{c.numberName}</td>
-                      <td className="px-4 py-3 whitespace-nowrap">
-                        {c.connected ? <Badge color="green">Yes</Badge> : <Badge color="red">No</Badge>}
-                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap">{c.connected?<Badge color="green">Yes</Badge>:<Badge color="red">No</Badge>}</td>
                       <td className="px-4 py-3 whitespace-nowrap text-gray-600">{c.duration}</td>
                       <td className="px-4 py-3 whitespace-nowrap">
-                        {c.recording === 'Recording' ? <Badge color="purple">Recording</Badge> : <span className="text-gray-400 text-xs">—</span>}
-                      </td>
-                      <td className="px-4 py-3 whitespace-nowrap">
-                        {c.pipeline !== 'N/A' ? (
-                          <span className="text-sm">
-                            <span className="text-blue-600 font-medium">Seller Lead</span>
-                            <span className="text-gray-400 mx-1">&rsaquo;</span>
-                            <span className="text-gray-600">Qualified</span>
-                          </span>
-                        ) : <span className="text-gray-400 text-xs">N/A</span>}
-                      </td>
-                      <td className="px-4 py-3 whitespace-nowrap">
-                        {c.nextContact !== 'N/A' ? (
-                          <Badge color="amber">{c.nextContact}</Badge>
-                        ) : <span className="text-gray-400 text-xs">N/A</span>}
+                        {c.recording==='Recording'
+                          ? <Badge color="purple" href={ghlLink(c.callerPhone)}><PlayIcon/><span className="ml-1">Play</span></Badge>
+                          : <span className="text-gray-400 text-xs">—</span>}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-
-            {/* Pagination */}
-            {totalPages > 1 && (
+            {totalPages>1 && (
               <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-between">
-                <p className="text-xs text-gray-500">
-                  Showing {(page-1)*perPage+1}–{Math.min(page*perPage, filtered.length)} of {filtered.length}
-                </p>
+                <p className="text-xs text-gray-500">Showing {(page-1)*perPage+1}–{Math.min(page*perPage,filtered.length)} of {filtered.length}</p>
                 <div className="flex items-center gap-1">
-                  <button onClick={() => setPage(Math.max(1, page-1))} disabled={page === 1}
-                    className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition">
-                    Prev
-                  </button>
-                  {Array.from({ length: totalPages }, (_, i) => (
-                    <button key={i} onClick={() => setPage(i+1)}
-                      className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition ${page === i+1 ? 'bg-blue-500 text-white border-blue-500' : 'border-gray-200 hover:bg-gray-50'}`}>
-                      {i+1}
-                    </button>
-                  ))}
-                  <button onClick={() => setPage(Math.min(totalPages, page+1))} disabled={page === totalPages}
-                    className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition">
-                    Next
-                  </button>
+                  <button onClick={()=>setPage(Math.max(1,page-1))} disabled={page===1} className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">Prev</button>
+                  {Array.from({length:totalPages},(_,i)=><button key={i} onClick={()=>setPage(i+1)} className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition ${page===i+1?'bg-blue-500 text-white border-blue-500':'border-gray-200 hover:bg-gray-50'}`}>{i+1}</button>)}
+                  <button onClick={()=>setPage(Math.min(totalPages,page+1))} disabled={page===totalPages} className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">Next</button>
                 </div>
               </div>
             )}
@@ -566,7 +327,6 @@ function App() {
     </div>
   );
 }
-
 ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
 </script>
 </body>
