@@ -62,10 +62,43 @@ interface CallRecord {
   numberName: string;
   direction: string;
   connected: boolean;
+  callStatus: string;
   durationSecs: number;
   hasRecording: boolean;
   contactId: string;
   source: string;
+  address: string;
+  contactType: string;
+}
+
+interface ContactInfo {
+  address: string;
+  contactType: string;
+  source: string;
+}
+
+const contactCache = new Map<string, ContactInfo>();
+
+async function fetchContactInfo(contactId: string): Promise<ContactInfo> {
+  if (contactCache.has(contactId)) return contactCache.get(contactId)!;
+
+  const res = await fetch(`${BASE}/contacts/${contactId}`, {
+    headers: getHeaders(),
+  });
+  if (!res.ok) {
+    return { address: "", contactType: "", source: "" };
+  }
+
+  const data = await res.json();
+  const c = data.contact || {};
+  const parts = [c.address1, c.city, c.state, c.postalCode].filter(Boolean);
+  const info: ContactInfo = {
+    address: parts.join(", "),
+    contactType: c.type || "",
+    source: c.source || "",
+  };
+  contactCache.set(contactId, info);
+  return info;
 }
 
 async function fetchAllCallConversations(): Promise<GHLConversation[]> {
@@ -179,18 +212,30 @@ export async function GET(request: Request) {
       const batch = toProcess.slice(i, i + batchSize);
       const results = await Promise.all(
         batch.map(async (conv) => {
-          const messages = await fetchCallMessages(conv.id);
+          const [messages, contactInfo] = await Promise.all([
+            fetchCallMessages(conv.id),
+            fetchContactInfo(conv.contactId),
+          ]);
           return messages.map((msg) => {
             const isInbound =
               msg.direction === "inbound" ||
               msg.messageType === "TYPE_IVR_CALL";
             const duration = msg.meta?.call?.duration || 0;
-            const status = msg.meta?.call?.status || msg.status || "";
-            const connected =
-              status === "completed" && duration > 5;
+            const rawStatus = msg.meta?.call?.status || msg.status || "";
 
-            // For inbound: "to" is the tracking number, "from" is caller
-            // For outbound: "from" is our number, "to" is the contact
+            // 20s minimum for a real connected call
+            const connected =
+              rawStatus === "completed" && duration >= 20;
+
+            // Human-readable call status
+            let callStatus = "No Answer";
+            if (rawStatus === "completed" && duration >= 20) callStatus = "Connected";
+            else if (rawStatus === "completed" && duration > 0) callStatus = "Brief";
+            else if (rawStatus === "voicemail") callStatus = "Voicemail";
+            else if (rawStatus === "busy") callStatus = "Busy";
+            else if (rawStatus === "no-answer") callStatus = "No Answer";
+            else if (rawStatus === "completed" && duration === 0) callStatus = "No Answer";
+
             const dialedNumber = isInbound ? msg.to : msg.from;
             const callerPhone = isInbound ? msg.from : msg.to;
 
@@ -204,10 +249,13 @@ export async function GET(request: Request) {
               numberName: getNumberName(dialedNumber),
               direction: isInbound ? "inbound" : "outbound",
               connected,
+              callStatus,
               durationSecs: duration,
               hasRecording: !!msg.meta?.call?.recordingUrl,
               contactId: conv.contactId,
-              source: getSource(conv.tags || []),
+              source: contactInfo.source || getSource(conv.tags || []),
+              address: contactInfo.address,
+              contactType: contactInfo.contactType,
             };
           });
         })

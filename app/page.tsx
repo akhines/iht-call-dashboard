@@ -17,10 +17,13 @@ interface CallRecord {
   numberName: string;
   direction: string;
   connected: boolean;
+  callStatus: string;
   durationSecs: number;
   hasRecording: boolean;
   contactId: string;
   source: string;
+  address: string;
+  contactType: string;
 }
 
 function fmtDur(s: number) {
@@ -116,6 +119,7 @@ export default function Dashboard() {
   const [numberFilter, setNumberFilter] = useState("");
   const [connFilter, setConnFilter] = useState("");
   const [dirFilter, setDirFilter] = useState("");
+  const [firstTimeOnly, setFirstTimeOnly] = useState(false);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const perPage = 15;
@@ -145,6 +149,13 @@ export default function Dashboard() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const now = useMemo(() => new Date(), [calls]);
 
+  // Count calls per phone number to detect first-time callers
+  const phoneCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    calls.forEach((c) => counts.set(c.callerPhone, (counts.get(c.callerPhone) || 0) + 1));
+    return counts;
+  }, [calls]);
+
   const filtered = useMemo(() => calls.filter((c) => {
     const d = new Date(c.date);
     const diff = (now.getTime() - d.getTime()) / (1000 * 60 * 60 * 24);
@@ -158,12 +169,13 @@ export default function Dashboard() {
     if (connFilter === "missed" && c.connected) return false;
     if (dirFilter === "inbound" && c.direction !== "inbound") return false;
     if (dirFilter === "outbound" && c.direction !== "outbound") return false;
+    if (firstTimeOnly && (phoneCounts.get(c.callerPhone) || 0) > 1) return false;
     if (search) {
       const s = search.toLowerCase();
-      if (!cleanName(c.contactName).toLowerCase().includes(s) && !c.callerPhone.includes(s)) return false;
+      if (!cleanName(c.contactName).toLowerCase().includes(s) && !c.callerPhone.includes(s) && !c.address.toLowerCase().includes(s)) return false;
     }
     return true;
-    }), [calls, dateRange, numberFilter, connFilter, dirFilter, search, now]);
+    }), [calls, dateRange, numberFilter, connFilter, dirFilter, firstTimeOnly, phoneCounts, search, now]);
 
   const numberNames = useMemo(() => Array.from(new Set(calls.map((c) => c.numberName))).sort(), [calls]);
 
@@ -205,8 +217,8 @@ export default function Dashboard() {
 
   const totalPages = Math.ceil(filtered.length / perPage);
   const paged = filtered.slice((page - 1) * perPage, page * perPage);
-  const clearFilters = () => { setDateRange("month"); setNumberFilter(""); setConnFilter(""); setDirFilter(""); setSearch(""); setPage(1); };
-  const hasFilters = dateRange !== "month" || numberFilter || connFilter || dirFilter || search;
+  const clearFilters = () => { setDateRange("month"); setNumberFilter(""); setConnFilter(""); setDirFilter(""); setFirstTimeOnly(false); setSearch(""); setPage(1); };
+  const hasFilters = dateRange !== "month" || numberFilter || connFilter || dirFilter || firstTimeOnly || search;
 
   if (loading) {
     return (
@@ -260,6 +272,13 @@ export default function Dashboard() {
             className={`w-full text-left px-3 py-2 rounded-lg text-sm transition flex items-center gap-2 ${dirFilter === "outbound" ? "bg-purple-500/20 text-purple-300" : "text-gray-400 hover:text-white hover:bg-white/5"}`}>
             <OutboundIcon /> Outbound
           </button>
+
+          <div className="pt-4 pb-2 px-3"><p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Caller</p></div>
+          <button onClick={() => { setFirstTimeOnly(!firstTimeOnly); setPage(1); }}
+            className={`w-full text-left px-3 py-2 rounded-lg text-sm transition flex items-center gap-2 ${firstTimeOnly ? "bg-amber-500/20 text-amber-300" : "text-gray-400 hover:text-white hover:bg-white/5"}`}>
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" /></svg>
+            First-Time Callers
+          </button>
         </nav>
         <div className="p-4 border-t border-white/10"><p className="text-gray-500 text-xs text-center">Impact Home Team &copy; 2026</p></div>
       </aside>
@@ -281,7 +300,7 @@ export default function Dashboard() {
             {error && <span className="text-red-500 text-xs">{error}</span>}
             <div className="relative">
               <span className="absolute inset-y-0 left-3 flex items-center"><SearchIcon /></span>
-              <input type="text" placeholder="Search name or phone..." value={search}
+              <input type="text" placeholder="Search name, phone, or address..." value={search}
                 onChange={(e) => { setSearch(e.target.value); setPage(1); }}
                 className="pl-9 pr-4 py-2 border border-gray-200 rounded-lg text-sm w-64 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400" />
             </div>
@@ -397,9 +416,11 @@ export default function Dashboard() {
                     <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Date & Time</th>
                     <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Contact</th>
                     <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Phone</th>
+                    <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Address</th>
                     <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Number</th>
+                    <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Type</th>
                     <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Direction</th>
-                    <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Connected</th>
+                    <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Status</th>
                     <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wider">Duration</th>
                   </tr>
                 </thead>
@@ -417,17 +438,28 @@ export default function Dashboard() {
                             {cleanName(c.contactName)}<LinkIcon />
                           </a>
                           {isLead(c.contactName) && <Badge color="blue">LEAD</Badge>}
+                          {(phoneCounts.get(c.callerPhone) || 0) === 1 && <Badge color="amber">NEW</Badge>}
                         </div>
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap mono text-gray-600">{fmtPhone(c.callerPhone)}</td>
+                      <td className="px-4 py-3 whitespace-nowrap text-gray-500 text-xs max-w-[200px] truncate" title={c.address}>{c.address || "—"}</td>
                       <td className="px-4 py-3 whitespace-nowrap text-gray-600">{c.numberName}</td>
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        {c.contactType === "lead" ? <Badge color="blue">Lead</Badge>
+                          : c.contactType === "customer" ? <Badge color="green">Customer</Badge>
+                          : <Badge color="gray">{c.contactType || "—"}</Badge>}
+                      </td>
                       <td className="px-4 py-3 whitespace-nowrap">
                         {c.direction === "inbound"
                           ? <Badge color="blue"><InboundIcon /><span className="ml-1">In</span></Badge>
                           : <Badge color="purple"><OutboundIcon /><span className="ml-1">Out</span></Badge>}
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap">
-                        {c.connected ? <Badge color="green">Yes</Badge> : <Badge color="red">No</Badge>}
+                        {c.callStatus === "Connected" ? <Badge color="green">Connected</Badge>
+                          : c.callStatus === "Brief" ? <Badge color="amber">Brief</Badge>
+                          : c.callStatus === "Voicemail" ? <Badge color="purple">Voicemail</Badge>
+                          : c.callStatus === "Busy" ? <Badge color="amber">Busy</Badge>
+                          : <Badge color="red">No Answer</Badge>}
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap text-gray-600">{fmtDur(c.durationSecs)}</td>
                     </tr>
