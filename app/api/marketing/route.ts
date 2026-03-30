@@ -31,11 +31,7 @@ const JOSH_PIPELINE = "ggnBpwig6OE37fXPQv7a";
 const CONTACT_TYPE_FIELD = "IfkLFRqVzW9XrCkXvPUQ";
 const MARKETING_CAMPAIGN_FIELD = "4fOhwf1m5nhK1c9vI6SJ";
 
-const OPP_FIELDS = {
-  abPrice: "auq20sgMLdGuBqt5f94I",
-  bcPrice: "eYnQy81LxuYK5Wxwjv5W",
-  grossProfit: "xCCFXqTAVdFowPoJWEz6",
-};
+// Profit comes from monetaryValue on the opportunity
 
 const JAN1_2026 = new Date("2026-01-01T00:00:00Z").getTime();
 
@@ -80,7 +76,7 @@ function findWeekKey(date: Date, weeks: Week[]): string | null {
 
 interface LeadRecord { date: number; channel: string; hasAddress: boolean; }
 interface ApptRecord { date: number; channel: string; cancelled: boolean; completed: boolean; }
-interface DealRecord { date: number; channel: string; category: string; abPrice: number; bcPrice: number; grossProfit: number; }
+interface DealRecord { date: number; channel: string; category: string; monetaryValue: number; }
 
 async function fetchAllSellerLeads(): Promise<LeadRecord[]> {
   const leads: LeadRecord[] = [];
@@ -184,38 +180,22 @@ async function fetchAllAppts(): Promise<ApptRecord[]> {
 async function fetchAllDeals(): Promise<DealRecord[]> {
   const deals: DealRecord[] = [];
 
-  // A-B signed = TC pipeline createdAt
+  // A-B signed = TC pipeline createdAt, profit = monetaryValue
   const tcRes = await fetch(`${BASE}/opportunities/search?location_id=${LOCATION_ID()}&pipeline_id=${TC_PIPELINE}&limit=100`, { headers: getHeaders() });
   if (tcRes.ok) {
     const tcData = await tcRes.json();
     for (const o of tcData.opportunities || []) {
       const d = new Date(o.createdAt).getTime();
       if (d < JAN1_2026) continue;
-      // Get channel from contact source (more reliable than opp source)
       const channel = o.contactId ? await getContactChannel(o.contactId) : getChannel(o.source || "", "");
-
-      // Fetch detail for pricing
-      let abPrice = 0, bcPrice = 0, grossProfit = 0;
-      const detailRes = await fetch(`${BASE}/opportunities/${o.id}`, { headers: getHeaders() });
-      if (detailRes.ok) {
-        const detail = await detailRes.json();
-        const opp = detail.opportunity || detail;
-        for (const cf of opp.customFields || []) {
-          const val = parseFloat(cf.fieldValue || cf.fieldValueString || "0") || 0;
-          if (cf.id === OPP_FIELDS.abPrice) abPrice = val;
-          if (cf.id === OPP_FIELDS.bcPrice) bcPrice = val;
-          if (cf.id === OPP_FIELDS.grossProfit) grossProfit = val;
-        }
-      }
-
-      deals.push({ date: d, channel, category: "ab", abPrice, bcPrice, grossProfit });
+      deals.push({ date: d, channel, category: "ab", monetaryValue: o.monetaryValue || 0 });
     }
   }
 
   // Closings from Mike/Josh closer pipelines
   const closerStages = [
-    { pipeline: MIKE_PIPELINE, stage: "64d1fa71-6952-41cd-be5e-1536715b6d87" }, // Mike 1 YD LINE
-    { pipeline: JOSH_PIPELINE, stage: "0c4afc64-8163-4723-9f78-d4a0d7e1d037" }, // Josh WON!
+    { pipeline: MIKE_PIPELINE, stage: "64d1fa71-6952-41cd-be5e-1536715b6d87" },
+    { pipeline: JOSH_PIPELINE, stage: "0c4afc64-8163-4723-9f78-d4a0d7e1d037" },
   ];
   for (const q of closerStages) {
     const res = await fetch(`${BASE}/opportunities/search?location_id=${LOCATION_ID()}&pipeline_id=${q.pipeline}&pipeline_stage_id=${q.stage}&limit=100`, { headers: getHeaders() });
@@ -225,11 +205,11 @@ async function fetchAllDeals(): Promise<DealRecord[]> {
       const d = new Date(o.lastStageChangeAt).getTime();
       if (d < JAN1_2026) continue;
       const ch = o.contactId ? await getContactChannel(o.contactId) : getChannel(o.source || "", "");
-      deals.push({ date: d, channel: ch, category: "closing", abPrice: 0, bcPrice: 0, grossProfit: 0 });
+      deals.push({ date: d, channel: ch, category: "closing", monetaryValue: o.monetaryValue || 0 });
     }
   }
 
-  // Settled = TC Closed Dispo
+  // Settled = TC Closed Dispo, profit = monetaryValue
   const settledRes = await fetch(`${BASE}/opportunities/search?location_id=${LOCATION_ID()}&pipeline_id=${TC_PIPELINE}&pipeline_stage_id=8464b838-cb2d-497a-89f6-07c4025ae17f&limit=100`, { headers: getHeaders() });
   if (settledRes.ok) {
     const data = await settledRes.json();
@@ -237,15 +217,7 @@ async function fetchAllDeals(): Promise<DealRecord[]> {
       const d = new Date(o.lastStageChangeAt).getTime();
       if (d < JAN1_2026) continue;
       const ch = o.contactId ? await getContactChannel(o.contactId) : getChannel(o.source || "", "");
-      const abDeal = deals.find((deal) => deal.category === "ab" && deal.channel === ch);
-      deals.push({
-        date: d,
-        channel: ch,
-        category: "settled",
-        abPrice: abDeal?.abPrice || 0,
-        bcPrice: abDeal?.bcPrice || 0,
-        grossProfit: abDeal?.grossProfit || 0,
-      });
+      deals.push({ date: d, channel: ch, category: "settled", monetaryValue: o.monetaryValue || 0 });
     }
   }
 
@@ -345,7 +317,7 @@ export async function GET(request: Request) {
           ab: weekAb.length,
           closings: weekClosings.length,
           settled: weekSettled.length,
-          grossProfit: weekSettled.reduce((a, d) => a + (d.grossProfit || (d.bcPrice && d.abPrice ? Math.max(0, d.bcPrice - d.abPrice) : 0)), 0),
+          grossProfit: weekSettled.reduce((a, d) => a + d.monetaryValue, 0),
           spend: manual.spend || 0,
           mailersSent: manual.mailersSent || 0,
         };
