@@ -25,6 +25,9 @@ const NUMBER_NAMES: Record<string, string> = {
   "+14104388938": "TV Leads",
   "+14105177545": "Office Line",
   "+14109273325": "GMB Backup",
+  "+14109413480": "Direct Mail 1: Zone A",
+  "+14103166197": "Impact Cash Buyers Line",
+  "+14439092598": "Display Ads",
 };
 
 interface GHLConversation {
