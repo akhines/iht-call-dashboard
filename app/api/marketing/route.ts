@@ -3,6 +3,14 @@ import { kv } from "@vercel/kv";
 
 export const dynamic = "force-dynamic";
 
+const MKT_CACHE_KEY = "marketing_cache";
+
+function getCurrentWeekNumber(): number {
+  const now = new Date();
+  const start = new Date("2026-01-05T00:00:00Z");
+  return Math.floor((now.getTime() - start.getTime()) / (7 * 24 * 60 * 60 * 1000));
+}
+
 const BASE = "https://services.leadconnectorhq.com";
 
 function getHeaders() {
@@ -266,15 +274,44 @@ export interface MarketingWeekData {
   channels: Record<string, ChannelWeekData>;
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     if (!process.env.GHL_API_TOKEN || !process.env.GHL_LOCATION_ID) {
       return NextResponse.json({ error: "Missing env vars" }, { status: 500 });
     }
 
+    const { searchParams } = new URL(request.url);
+    const forceRefresh = searchParams.get("refresh") === "true";
+    const currentWeek = getCurrentWeekNumber();
+
+    // Check cache (unless force refresh)
+    if (!forceRefresh) {
+      try {
+        const cached = await kv.get<{ weekNumber: number; data: unknown }>(MKT_CACHE_KEY);
+        if (cached && cached.weekNumber === currentWeek) {
+          console.log("Marketing: serving from cache");
+          // Still merge in latest manual inputs
+          const manualInputs = await kv.get<Record<string, Record<string, { spend?: number; mailersSent?: number }>>>("marketing_inputs") || {};
+          const cachedData = cached.data as { weeks: MarketingWeekData[]; channels: string[]; lastUpdated: string };
+          for (const w of cachedData.weeks) {
+            for (const ch of cachedData.channels) {
+              const manual = (manualInputs as Record<string, Record<string, { spend?: number; mailersSent?: number }>>)?.[w.weekKey]?.[ch];
+              if (manual) {
+                w.channels[ch].spend = manual.spend || 0;
+                w.channels[ch].mailersSent = manual.mailersSent || 0;
+              }
+            }
+          }
+          return NextResponse.json(cachedData);
+        }
+      } catch {
+        // KV not available
+      }
+    }
+
     const weeks = getWeeks2026();
 
-    console.log("Marketing: fetching all GHL data...");
+    console.log("Marketing: fetching fresh GHL data...");
     const [allLeads, allAppts, allDeals] = await Promise.all([
       fetchAllSellerLeads(),
       fetchAllAppts(),
@@ -322,11 +359,21 @@ export async function GET() {
       };
     });
 
-    return NextResponse.json({
+    const responseData = {
       weeks: weekData,
-      channels: CHANNELS,
+      channels: CHANNELS as unknown as string[],
       lastUpdated: new Date().toISOString(),
-    });
+    };
+
+    // Cache for this week
+    try {
+      await kv.set(MKT_CACHE_KEY, { weekNumber: currentWeek, data: responseData });
+      console.log("Marketing: cached for week", currentWeek);
+    } catch {
+      // KV not available
+    }
+
+    return NextResponse.json(responseData);
   } catch (error) {
     console.error("Marketing API error:", error);
     return NextResponse.json({ error: "Failed to build marketing scorecard" }, { status: 500 });

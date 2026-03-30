@@ -1,6 +1,20 @@
 import { NextResponse } from "next/server";
+import { kv } from "@vercel/kv";
 
 export const dynamic = "force-dynamic";
+
+const CACHE_KEY = "scorecard_cache";
+
+interface CachedData {
+  weekNumber: number;
+  data: { weeks: WeekData[]; lastUpdated: string };
+}
+
+function getCurrentWeekNumber(): number {
+  const now = new Date();
+  const start = new Date("2026-01-05T00:00:00Z");
+  return Math.floor((now.getTime() - start.getTime()) / (7 * 24 * 60 * 60 * 1000));
+}
 
 const BASE = "https://services.leadconnectorhq.com";
 
@@ -369,16 +383,33 @@ export interface WeekData {
   apptsBySource: SourceBreakdown;
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     if (!process.env.GHL_API_TOKEN || !process.env.GHL_LOCATION_ID) {
       return NextResponse.json({ error: "Missing env vars" }, { status: 500 });
     }
 
+    const { searchParams } = new URL(request.url);
+    const forceRefresh = searchParams.get("refresh") === "true";
+    const currentWeek = getCurrentWeekNumber();
+
+    // Check cache (unless force refresh)
+    if (!forceRefresh) {
+      try {
+        const cached = await kv.get<CachedData>(CACHE_KEY);
+        if (cached && cached.weekNumber === currentWeek) {
+          console.log("Scorecard: serving from cache");
+          return NextResponse.json(cached.data);
+        }
+      } catch {
+        // KV not available, proceed with fresh fetch
+      }
+    }
+
     const weeks = getWeeks2026();
 
     // Fetch all data in parallel
-    console.log("Scorecard: fetching all GHL data...");
+    console.log("Scorecard: fetching fresh GHL data...");
     const [allCalls, allSellers, allAppts, allOpps] = await Promise.all([
       fetchAllCalls2026(),
       fetchAllSellerContacts2026(),
@@ -496,10 +527,20 @@ export async function GET() {
       };
     });
 
-    return NextResponse.json({
+    const responseData = {
       weeks: weekData,
       lastUpdated: new Date().toISOString(),
-    });
+    };
+
+    // Cache for this week
+    try {
+      await kv.set(CACHE_KEY, { weekNumber: currentWeek, data: responseData });
+      console.log("Scorecard: cached for week", currentWeek);
+    } catch {
+      // KV not available
+    }
+
+    return NextResponse.json(responseData);
   } catch (error) {
     console.error("Scorecard API error:", error);
     return NextResponse.json(

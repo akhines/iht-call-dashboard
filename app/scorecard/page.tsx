@@ -284,7 +284,7 @@ export default function ScorecardPage() {
           </div>
           <div className="flex items-center gap-3">
             {error && <span className="text-red-500 text-xs">{error}</span>}
-            <button onClick={() => { setLoading(true); setError(""); fetch("/api/scorecard").then(r => r.json()).then(d => { setWeeks(d.weeks || []); setLastUpdated(d.lastUpdated || ""); }).catch(() => setError("Failed")).finally(() => setLoading(false)); }}
+            <button onClick={() => { setLoading(true); setError(""); fetch("/api/scorecard?refresh=true").then(r => r.json()).then(d => { setWeeks(d.weeks || []); setLastUpdated(d.lastUpdated || ""); }).catch(() => setError("Failed")).finally(() => setLoading(false)); }}
               className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-500 hover:text-gray-700 transition" title="Refresh">
               <RefreshIcon />
             </button>

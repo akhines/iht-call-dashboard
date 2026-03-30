@@ -67,9 +67,9 @@ export default function MarketingPage() {
   const [editValue, setEditValue] = useState("");
   const [saving, setSaving] = useState(false);
 
-  const fetchData = () => {
+  const fetchData = (forceRefresh = false) => {
     setLoading(true);
-    fetch("/api/marketing")
+    fetch(`/api/marketing${forceRefresh ? "?refresh=true" : ""}`)
       .then((r) => r.json())
       .then((data) => {
         if (data.error) setError(data.error);
@@ -214,7 +214,7 @@ export default function MarketingPage() {
           <div className="flex items-center gap-3">
             {saving && <span className="text-blue-500 text-xs animate-pulse">Saving...</span>}
             {error && <span className="text-red-500 text-xs">{error}</span>}
-            <button onClick={fetchData} className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-500 hover:text-gray-700 transition" title="Refresh">
+            <button onClick={() => fetchData(true)} className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-500 hover:text-gray-700 transition" title="Force Refresh">
               <RefreshIcon />
             </button>
           </div>
