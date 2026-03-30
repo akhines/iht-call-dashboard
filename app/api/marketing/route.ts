@@ -46,6 +46,8 @@ function getChannel(source: string, campaign: string): string {
   if (s.includes("gmb") || s.includes("google my business")) return "SEO";
   if (s.includes("referral")) return "Other";
   if (s.includes("probate")) return "Mail";
+  // Filter out internal/team sources
+  if (s.includes("emma") || s.includes("josh smrt") || s.includes("callrail") || s.includes("other: not found")) return "Other";
   return "Other";
 }
 
@@ -58,7 +60,10 @@ function getWeeks2026(): Week[] {
   while (current < now) {
     const end = new Date(current);
     end.setDate(end.getDate() + 6);
-    weeks.push({ start: new Date(current), end: new Date(Math.min(end.getTime(), now.getTime())), key: current.toISOString().slice(0, 10) });
+    // Only include completed weeks
+    if (end.getTime() < now.getTime()) {
+      weeks.push({ start: new Date(current), end: new Date(end), key: current.toISOString().slice(0, 10) });
+    }
     current.setDate(current.getDate() + 7);
   }
   return weeks;

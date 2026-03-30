@@ -46,11 +46,7 @@ const STAGES = {
   tcClosedDispo: "8464b838-cb2d-497a-89f6-07c4025ae17f",
 };
 
-const OPP_FIELDS = {
-  abPrice: "auq20sgMLdGuBqt5f94I",
-  bcPrice: "eYnQy81LxuYK5Wxwjv5W",
-  grossProfit: "xCCFXqTAVdFowPoJWEz6",
-};
+// Profit comes from monetaryValue on the opportunity
 
 const CONTACT_TYPE_FIELD = "IfkLFRqVzW9XrCkXvPUQ";
 
@@ -72,11 +68,14 @@ function getWeeks2026(): Week[] {
   while (current < now) {
     const end = new Date(current);
     end.setDate(end.getDate() + 6);
-    weeks.push({
-      start: new Date(current),
-      end: new Date(Math.min(end.getTime(), now.getTime())),
-      key: current.toISOString().slice(0, 10),
-    });
+    // Only include completed weeks (end date has passed)
+    if (end.getTime() < now.getTime()) {
+      weeks.push({
+        start: new Date(current),
+        end: new Date(end),
+        key: current.toISOString().slice(0, 10),
+      });
+    }
     current.setDate(current.getDate() + 7);
   }
   return weeks;
@@ -102,30 +101,55 @@ interface CallRecord {
 }
 
 async function fetchAllCalls2026(): Promise<CallRecord[]> {
-  const allCalls: CallRecord[] = [];
+  // Reuse the calls API endpoint which already handles full pagination
+  const baseUrl = process.env.VERCEL_URL
+    ? `https://${process.env.VERCEL_URL}`
+    : "http://localhost:3000";
 
-  // Get all TYPE_CALL conversations, paginating
-  let startAfterDate: number | null = null;
-  for (let page = 0; page < 20; page++) {
-    let url = `${BASE}/conversations/search?locationId=${LOCATION_ID()}&limit=100&lastMessageType=TYPE_CALL&sort_by=last_message_date&sort_order=desc`;
-    if (startAfterDate) url += `&startAfterDate=${startAfterDate}`;
-
-    const res = await fetch(url, { headers: getHeaders() });
-    if (!res.ok) break;
+  try {
+    const res = await fetch(`${baseUrl}/api/calls?mode=full`, { headers: { Accept: "application/json" } });
+    if (!res.ok) throw new Error("Calls API failed");
     const data = await res.json();
-    const convs = data.conversations || [];
-    if (convs.length === 0) break;
+    return (data.calls || []).map((c: { date: string; direction: string; durationSecs: number; connected: boolean }) => ({
+      date: new Date(c.date).getTime(),
+      direction: c.direction,
+      duration: c.durationSecs,
+      connected: c.connected,
+    }));
+  } catch {
+    console.error("Scorecard: failed to fetch calls from /api/calls, falling back to direct GHL fetch");
+    // Fallback: direct GHL fetch with proper pagination
+    const allCalls: CallRecord[] = [];
+    const allConvIds: string[] = [];
 
-    // Stop if we've gone before 2026
-    const lastDate = convs[convs.length - 1].lastMessageDate;
-    const convIds = convs
-      .filter((c: { lastMessageDate: number }) => c.lastMessageDate >= JAN1_2026)
-      .map((c: { id: string }) => c.id);
+    // First collect ALL conversation IDs
+    let startAfterDate: number | null = null;
+    for (let page = 0; page < 20; page++) {
+      let url = `${BASE}/conversations/search?locationId=${LOCATION_ID()}&limit=100&lastMessageType=TYPE_CALL&sort_by=last_message_date&sort_order=desc`;
+      if (startAfterDate) url += `&startAfterDate=${startAfterDate}`;
 
-    // Fetch messages in batches
+      const res = await fetch(url, { headers: getHeaders() });
+      if (!res.ok) break;
+      const data = await res.json();
+      const convs = data.conversations || [];
+      if (convs.length === 0) break;
+
+      for (const c of convs) {
+        if (c.lastMessageDate >= JAN1_2026) allConvIds.push(c.id);
+      }
+
+      const lastDate = convs[convs.length - 1].lastMessageDate;
+      if (lastDate < JAN1_2026) break;
+      startAfterDate = lastDate;
+      if (convs.length < 100) break;
+    }
+
+    console.log(`Scorecard: fetching messages for ${allConvIds.length} conversations`);
+
+    // Now fetch messages for ALL conversations
     const batchSize = 10;
-    for (let i = 0; i < convIds.length; i += batchSize) {
-      const batch = convIds.slice(i, i + batchSize);
+    for (let i = 0; i < allConvIds.length; i += batchSize) {
+      const batch = allConvIds.slice(i, i + batchSize);
       const results = await Promise.all(
         batch.map(async (convId: string) => {
           const msgRes = await fetch(`${BASE}/conversations/${convId}/messages`, { headers: getHeaders() });
@@ -157,13 +181,8 @@ async function fetchAllCalls2026(): Promise<CallRecord[]> {
         }
       }
     }
-
-    if (lastDate < JAN1_2026) break;
-    startAfterDate = lastDate;
-    if (convs.length < 100) break;
+    return allCalls;
   }
-
-  return allCalls;
 }
 
 interface SellerContact {
@@ -291,12 +310,10 @@ async function fetchAllAppointments2026(): Promise<ApptRecord[]> {
 interface OppRecord {
   date: number;
   category: "offer_mike" | "offer_josh" | "ab_signed" | "bc_signed" | "settled";
-  closer: string; // "Mike" or "Josh"
+  closer: string;
   name: string;
   source: string;
-  abPrice: number;
-  bcPrice: number;
-  grossProfit: number;
+  monetaryValue: number;
 }
 
 async function fetchOppsByStage(pipelineId: string, stageId: string): Promise<{ id: string; name: string; source: string; contactId: string; lastStageChangeAt: string; createdAt: string }[]> {
@@ -325,12 +342,12 @@ async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
   for (const o of mikeOffers) {
     const d = new Date(o.lastStageChangeAt).getTime();
     const src = o.contactId ? await getContactSource(o.contactId) : o.source;
-    if (d >= JAN1_2026) opps.push({ date: d, category: "offer_mike", closer: "Mike", name: o.name, source: src, abPrice: 0, bcPrice: 0, grossProfit: 0 });
+    if (d >= JAN1_2026) opps.push({ date: d, category: "offer_mike", closer: "Mike", name: o.name, source: src, monetaryValue: 0 });
   }
   for (const o of joshOffers) {
     const d = new Date(o.lastStageChangeAt).getTime();
     const src = o.contactId ? await getContactSource(o.contactId) : o.source;
-    if (d >= JAN1_2026) opps.push({ date: d, category: "offer_josh", closer: "Josh", name: o.name, source: src, abPrice: 0, bcPrice: 0, grossProfit: 0 });
+    if (d >= JAN1_2026) opps.push({ date: d, category: "offer_josh", closer: "Josh", name: o.name, source: src, monetaryValue: 0 });
   }
 
   // A-B signed: ALL TC pipeline opps, use createdAt as the date they entered TC
@@ -342,10 +359,8 @@ async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
       const d = new Date(o.createdAt).getTime();
       if (d >= JAN1_2026) {
         const src = o.contactId ? await getContactSource(o.contactId) : (o.source || "");
-        // Determine closer from which pipeline the contact came through
         const isMike = mikeOffers.some((m) => m.contactId === o.contactId);
-        const closer = isMike ? "Mike" : "Josh";
-        opps.push({ date: d, category: "ab_signed", closer, name: o.name || "", source: src, abPrice: 0, bcPrice: 0, grossProfit: 0 });
+        opps.push({ date: d, category: "ab_signed", closer: isMike ? "Mike" : "Josh", name: o.name || "", source: src, monetaryValue: o.monetaryValue || 0 });
       }
     }
   }
@@ -355,29 +370,23 @@ async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
     const d = new Date(o.lastStageChangeAt).getTime();
     const src = o.contactId ? await getContactSource(o.contactId) : o.source;
     const isMike = mikeOffers.some((m) => m.contactId === o.contactId);
-    if (d >= JAN1_2026) opps.push({ date: d, category: "bc_signed", closer: isMike ? "Mike" : "Josh", name: o.name, source: src, abPrice: 0, bcPrice: 0, grossProfit: 0 });
+    if (d >= JAN1_2026) opps.push({ date: d, category: "bc_signed", closer: isMike ? "Mike" : "Josh", name: o.name, source: src, monetaryValue: 0 });
   }
 
-  // Settled: TC "Closed - Dispo Complete", fetch detail for pricing
+  // Settled: TC "Closed - Dispo Complete", profit = monetaryValue
   for (const o of closedDispo) {
     const d = new Date(o.lastStageChangeAt).getTime();
     if (d < JAN1_2026) continue;
     const src = o.contactId ? await getContactSource(o.contactId) : o.source;
     const isMike = mikeOffers.some((m) => m.contactId === o.contactId);
-
-    let abPrice = 0, bcPrice = 0, grossProfit = 0;
+    // Fetch monetaryValue from the full opportunity detail
+    let monetaryValue = 0;
     const detailRes = await fetch(`${BASE}/opportunities/${o.id}`, { headers: getHeaders() });
     if (detailRes.ok) {
       const detail = await detailRes.json();
-      const opp = detail.opportunity || detail;
-      for (const cf of opp.customFields || []) {
-        const val = parseFloat(cf.fieldValue || cf.fieldValueString || "0") || 0;
-        if (cf.id === OPP_FIELDS.abPrice) abPrice = val;
-        if (cf.id === OPP_FIELDS.bcPrice) bcPrice = val;
-        if (cf.id === OPP_FIELDS.grossProfit) grossProfit = val;
-      }
+      monetaryValue = (detail.opportunity || detail).monetaryValue || 0;
     }
-    opps.push({ date: d, category: "settled", closer: isMike ? "Mike" : "Josh", name: o.name, source: src, abPrice, bcPrice, grossProfit });
+    opps.push({ date: d, category: "settled", closer: isMike ? "Mike" : "Josh", name: o.name, source: src, monetaryValue });
   }
 
   return opps;
@@ -523,7 +532,7 @@ export async function GET(request: Request) {
       const bcSigned = weekOpps.filter((o) => o.category === "bc_signed").length;
       const settledOpps = weekOpps.filter((o) => o.category === "settled");
       const settled = settledOpps.length;
-      const grossProfit = settledOpps.reduce((a, o) => a + (o.grossProfit || (o.bcPrice && o.abPrice ? Math.max(0, o.bcPrice - o.abPrice) : 0)), 0);
+      const grossProfit = settledOpps.reduce((a, o) => a + o.monetaryValue, 0);
 
       // Source breakdowns
       const leadsBySource: SourceBreakdown = {};
