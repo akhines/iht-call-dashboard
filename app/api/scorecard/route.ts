@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+export const dynamic = "force-dynamic";
+
 const BASE = "https://services.leadconnectorhq.com";
 
 function getHeaders() {
@@ -13,11 +15,10 @@ function getHeaders() {
 const LOCATION_ID = () => process.env.GHL_LOCATION_ID!;
 
 // Calendar IDs
-const MIKE_CALENDAR = "1pRjeG5QkespBBQK3u1s"; // In Person Appointments with Mike
-const JOSH_CALENDAR = "19xfzyb7vedvmzqNf8FK"; // Offer Call with Josh (virtual)
+const MIKE_CALENDAR = "1pRjeG5QkespBBQK3u1s";
+const JOSH_CALENDAR = "19xfzyb7vedvmzqNf8FK";
 
 // Pipeline IDs
-// const LEADS_PIPELINE = "6tntgcGDlTyw30KUgRrS";
 const MIKE_PIPELINE = "nwSjS0rUTMGbgDvyrEe4";
 const JOSH_PIPELINE = "ggnBpwig6OE37fXPQv7a";
 const DEALS_PIPELINE = "DiGXnGTlQCOMZQJmWQe9";
@@ -25,40 +26,295 @@ const TC_PIPELINE = "ofMQolXiKGyg6WNOJS88";
 
 // Stage IDs
 const STAGES = {
-  // Mike
-  mikeApptScheduled: "47ca5b20-f37a-4689-bcce-db719ab2fbe3",
   mikeOfferMade: "cdd65b88-c954-4f80-bd23-3d4dced615ad",
-  mike1YdLine: "64d1fa71-6952-41cd-be5e-1536715b6d87",
-  // Josh
-  joshApptScheduled: "86baa3c7-ab3f-4d8b-b2b3-24955df8e97f",
   joshOffered: "d6a230e1-fc7d-4881-b238-70b83230dfc4",
-  josh1YdLine: "f02c3be3-680d-46f7-b36f-766a8f72f39b",
-  joshWon: "0c4afc64-8163-4723-9f78-d4a0d7e1d037",
-  // Deals
   underContract: "c72967b1-115d-4ee5-8b27-c3a60d67137a",
-  closedDeal: "245bc5b3-e2ac-4886-8928-907560ec3f15",
-  // TC
-  tcNewDeal: "1cfaafce-62f0-469c-8c1c-3b354a289559",
-  tcBcAssigned: "79163384-97f7-4b12-a3ca-a15c092f04f4",
-  tcReadyForDocusign: "4ee76e2e-e3b9-49c6-b0ad-5b081e3942bf",
-  tcClosingScheduled: "5f2b5b2f-face-4733-ae83-52a1bcaf72da",
   tcClosedDispo: "8464b838-cb2d-497a-89f6-07c4025ae17f",
 };
 
-// Opportunity custom field IDs
 const OPP_FIELDS = {
   abPrice: "auq20sgMLdGuBqt5f94I",
   bcPrice: "eYnQy81LxuYK5Wxwjv5W",
   grossProfit: "xCCFXqTAVdFowPoJWEz6",
 };
 
-// Contact custom field ID for seller/buyer type
 const CONTACT_TYPE_FIELD = "IfkLFRqVzW9XrCkXvPUQ";
 
-interface WeekData {
+const JAN1_2026 = new Date("2026-01-01T00:00:00Z").getTime();
+
+// ============ WEEK HELPERS ============
+
+interface Week {
+  start: Date;
+  end: Date;
+  key: string; // "2026-01-05"
+}
+
+function getWeeks2026(): Week[] {
+  const weeks: Week[] = [];
+  const current = new Date("2026-01-05T00:00:00Z");
+  const now = new Date();
+
+  while (current < now) {
+    const end = new Date(current);
+    end.setDate(end.getDate() + 6);
+    weeks.push({
+      start: new Date(current),
+      end: new Date(Math.min(end.getTime(), now.getTime())),
+      key: current.toISOString().slice(0, 10),
+    });
+    current.setDate(current.getDate() + 7);
+  }
+  return weeks;
+}
+
+function findWeekKey(date: Date, weeks: Week[]): string | null {
+  const t = date.getTime();
+  for (const w of weeks) {
+    if (t >= w.start.getTime() && t <= w.end.getTime() + 86400000) {
+      return w.key;
+    }
+  }
+  return null;
+}
+
+// ============ DATA FETCHERS (fetch ALL, then bucket) ============
+
+interface CallRecord {
+  date: number;
+  direction: string;
+  duration: number;
+  connected: boolean;
+}
+
+async function fetchAllCalls2026(): Promise<CallRecord[]> {
+  const allCalls: CallRecord[] = [];
+
+  // Get all TYPE_CALL conversations, paginating
+  let startAfterDate: number | null = null;
+  for (let page = 0; page < 20; page++) {
+    let url = `${BASE}/conversations/search?locationId=${LOCATION_ID()}&limit=100&lastMessageType=TYPE_CALL&sort_by=last_message_date&sort_order=desc`;
+    if (startAfterDate) url += `&startAfterDate=${startAfterDate}`;
+
+    const res = await fetch(url, { headers: getHeaders() });
+    if (!res.ok) break;
+    const data = await res.json();
+    const convs = data.conversations || [];
+    if (convs.length === 0) break;
+
+    // Stop if we've gone before 2026
+    const lastDate = convs[convs.length - 1].lastMessageDate;
+    const convIds = convs
+      .filter((c: { lastMessageDate: number }) => c.lastMessageDate >= JAN1_2026)
+      .map((c: { id: string }) => c.id);
+
+    // Fetch messages in batches
+    const batchSize = 10;
+    for (let i = 0; i < convIds.length; i += batchSize) {
+      const batch = convIds.slice(i, i + batchSize);
+      const results = await Promise.all(
+        batch.map(async (convId: string) => {
+          const msgRes = await fetch(`${BASE}/conversations/${convId}/messages`, { headers: getHeaders() });
+          if (!msgRes.ok) return [];
+          const msgData = await msgRes.json();
+          let msgs = msgData.messages || [];
+          if (msgs && typeof msgs === "object" && !Array.isArray(msgs)) msgs = msgs.messages || [];
+          return msgs;
+        })
+      );
+
+      for (const msgs of results) {
+        for (const msg of msgs) {
+          const mt = msg.messageType || "";
+          if (!mt.includes("CALL")) continue;
+          const msgDate = new Date(msg.dateAdded).getTime();
+          if (msgDate < JAN1_2026) continue;
+
+          const isInbound = msg.direction === "inbound" || mt === "TYPE_IVR_CALL";
+          const duration = msg.meta?.call?.duration || 0;
+          const status = msg.meta?.call?.status || msg.status || "";
+
+          allCalls.push({
+            date: msgDate,
+            direction: isInbound ? "inbound" : "outbound",
+            duration,
+            connected: status === "completed" && duration >= 20,
+          });
+        }
+      }
+    }
+
+    if (lastDate < JAN1_2026) break;
+    startAfterDate = lastDate;
+    if (convs.length < 100) break;
+  }
+
+  return allCalls;
+}
+
+interface SellerContact {
+  dateAdded: number;
+  hasAddress: boolean;
+}
+
+async function fetchAllSellerContacts2026(): Promise<SellerContact[]> {
+  const sellers: SellerContact[] = [];
+  let startAfterId = "";
+  let startAfter = 0;
+
+  for (let page = 0; page < 50; page++) {
+    let url = `${BASE}/contacts/?locationId=${LOCATION_ID()}&limit=100`;
+    if (startAfterId) url += `&startAfterId=${startAfterId}&startAfter=${startAfter}`;
+
+    const res = await fetch(url, { headers: getHeaders() });
+    if (!res.ok) break;
+    const data = await res.json();
+    const contacts = data.contacts || [];
+    if (contacts.length === 0) break;
+
+    for (const c of contacts) {
+      const created = new Date(c.dateAdded).getTime();
+      if (created < JAN1_2026) continue;
+
+      const cfs: Record<string, string> = {};
+      for (const cf of c.customFields || []) cfs[cf.id] = cf.value;
+
+      if (cfs[CONTACT_TYPE_FIELD] === "Seller") {
+        sellers.push({
+          dateAdded: created,
+          hasAddress: !!(c.address1 && c.address1.trim()),
+        });
+      }
+    }
+
+    const meta = data.meta || {};
+    if (!meta.nextPageUrl) break;
+    startAfterId = meta.startAfterId || "";
+    startAfter = meta.startAfter || 0;
+
+    // Contacts are newest-first; if last one is before 2026, stop
+    const lastCreated = new Date(contacts[contacts.length - 1].dateAdded).getTime();
+    if (lastCreated < JAN1_2026) break;
+  }
+
+  return sellers;
+}
+
+interface ApptRecord {
+  date: number;
+  calendarId: string;
+  cancelled: boolean;
+  completed: boolean;
+  rescheduled: boolean;
+}
+
+async function fetchAllAppointments2026(): Promise<ApptRecord[]> {
+  const appts: ApptRecord[] = [];
+  const now = Date.now();
+
+  for (const calId of [MIKE_CALENDAR, JOSH_CALENDAR]) {
+    const url = `${BASE}/calendars/events?locationId=${LOCATION_ID()}&calendarId=${calId}&startTime=${JAN1_2026}&endTime=${now}`;
+    const res = await fetch(url, { headers: getHeaders() });
+    if (!res.ok) continue;
+    const data = await res.json();
+
+    for (const e of data.events || []) {
+      if (e.deleted) continue;
+      const startTime = new Date(e.startTime).getTime();
+      const endTime = new Date(e.endTime).getTime();
+      const title = (e.title || "").toLowerCase();
+      const status = e.appointmentStatus || "";
+
+      const cancelled = status === "cancelled" || title.startsWith("c-") || title.includes("cancel");
+      const completed = !cancelled && endTime < now;
+
+      appts.push({
+        date: startTime,
+        calendarId: calId,
+        cancelled,
+        completed,
+        rescheduled: title.includes("reschedul"),
+      });
+    }
+  }
+
+  return appts;
+}
+
+interface OppRecord {
+  stageChangedAt: number;
+  pipeline: string;
+  stageId: string;
+  abPrice: number;
+  bcPrice: number;
+  grossProfit: number;
+}
+
+async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
+  const opps: OppRecord[] = [];
+
+  const queries = [
+    { pipeline: MIKE_PIPELINE, stage: STAGES.mikeOfferMade },
+    { pipeline: JOSH_PIPELINE, stage: STAGES.joshOffered },
+    { pipeline: DEALS_PIPELINE, stage: STAGES.underContract },
+    { pipeline: TC_PIPELINE, stage: STAGES.tcClosedDispo },
+  ];
+
+  for (const q of queries) {
+    let hasMore = true;
+    let pageNum = 0;
+
+    while (hasMore && pageNum < 10) {
+      const url = `${BASE}/opportunities/search?location_id=${LOCATION_ID()}&pipeline_id=${q.pipeline}&pipeline_stage_id=${q.stage}&limit=100`;
+      const res = await fetch(url, { headers: getHeaders() });
+      if (!res.ok) break;
+      const data = await res.json();
+      const opportunities = data.opportunities || [];
+
+      for (const o of opportunities) {
+        const changed = new Date(o.lastStageChangeAt).getTime();
+        if (changed < JAN1_2026) continue;
+
+        let abPrice = 0, bcPrice = 0, grossProfit = 0;
+
+        // For settled deals, fetch full detail for pricing
+        if (q.stage === STAGES.tcClosedDispo) {
+          const detailRes = await fetch(`${BASE}/opportunities/${o.id}`, { headers: getHeaders() });
+          if (detailRes.ok) {
+            const detail = await detailRes.json();
+            const opp = detail.opportunity || detail;
+            for (const cf of opp.customFields || []) {
+              const val = parseFloat(cf.fieldValue || cf.fieldValueString || "0") || 0;
+              if (cf.id === OPP_FIELDS.abPrice) abPrice = val;
+              if (cf.id === OPP_FIELDS.bcPrice) bcPrice = val;
+              if (cf.id === OPP_FIELDS.grossProfit) grossProfit = val;
+            }
+          }
+        }
+
+        opps.push({
+          stageChangedAt: changed,
+          pipeline: q.pipeline,
+          stageId: q.stage,
+          abPrice,
+          bcPrice,
+          grossProfit,
+        });
+      }
+
+      if (opportunities.length < 100) hasMore = false;
+      pageNum++;
+    }
+  }
+
+  return opps;
+}
+
+// ============ BUILD WEEKLY SCORECARD ============
+
+export interface WeekData {
   startDate: string;
   endDate: string;
-  // Calls
   dials: number;
   totalInbound: number;
   pickUpRate: number;
@@ -66,11 +322,9 @@ interface WeekData {
   connects: number;
   avgCallDuration: number;
   connectRate: number;
-  // Contacts
   leads: number;
   prospects: number;
   bookingPct: number;
-  // Appointments
   inPersonBooked: number;
   virtualBooked: number;
   cancelledInPerson: number;
@@ -80,7 +334,6 @@ interface WeekData {
   virtualCompleted: number;
   showRateInPerson: number;
   showRateVirtual: number;
-  // Pipeline
   inPersonOffers: number;
   virtualOffers: number;
   abSigned: number;
@@ -90,320 +343,113 @@ interface WeekData {
   netProfit: number;
 }
 
-function getWeeks2026(): { start: Date; end: Date }[] {
-  const weeks: { start: Date; end: Date }[] = [];
-  // Start from Monday Jan 5, 2026 (first full work week)
-  const current = new Date("2026-01-05T00:00:00Z");
-  const now = new Date();
-
-  while (current < now) {
-    const end = new Date(current);
-    end.setDate(end.getDate() + 6); // Sunday
-    if (end > now) {
-      end.setTime(now.getTime());
-    }
-    weeks.push({ start: new Date(current), end: new Date(end) });
-    current.setDate(current.getDate() + 7);
-  }
-  return weeks;
-}
-
-// Fetch calls for a date range
-async function fetchCallsForRange(start: Date, end: Date) {
-  const startTs = start.getTime();
-  const endTs = end.getTime() + 86400000; // include end day
-
-  // Search call conversations
-  const url = `${BASE}/conversations/search?locationId=${LOCATION_ID()}&limit=100&lastMessageType=TYPE_CALL&sort_by=last_message_date&sort_order=desc`;
-  const res = await fetch(url, { headers: getHeaders() });
-  if (!res.ok) return { dials: 0, totalInbound: 0, missedCalls: 0, connects: 0, totalDuration: 0 };
-
-  const data = await res.json();
-  const convs = data.conversations || [];
-
-  let dials = 0, totalInbound = 0, missedCalls = 0, connects = 0, totalDuration = 0;
-
-  // For each conversation, get messages
-  const batchSize = 10;
-  for (let i = 0; i < convs.length; i += batchSize) {
-    const batch = convs.slice(i, i + batchSize);
-    const results = await Promise.all(
-      batch.map(async (conv: { id: string; lastMessageDate: number }) => {
-        const msgRes = await fetch(`${BASE}/conversations/${conv.id}/messages`, { headers: getHeaders() });
-        if (!msgRes.ok) return [];
-        const msgData = await msgRes.json();
-        let msgs = msgData.messages || [];
-        if (msgs && typeof msgs === "object" && !Array.isArray(msgs)) {
-          msgs = msgs.messages || [];
-        }
-        return msgs;
-      })
-    );
-
-    for (const msgs of results) {
-      for (const msg of msgs) {
-        const mt = msg.messageType || "";
-        if (!mt.includes("CALL")) continue;
-        const msgDate = new Date(msg.dateAdded).getTime();
-        if (msgDate < startTs || msgDate > endTs) continue;
-
-        const isInbound = msg.direction === "inbound" || mt === "TYPE_IVR_CALL";
-        const duration = msg.meta?.call?.duration || 0;
-        const status = msg.meta?.call?.status || msg.status || "";
-        const connected = status === "completed" && duration >= 20;
-
-        if (isInbound) totalInbound++;
-        else dials++;
-
-        if (connected) {
-          connects++;
-          totalDuration += duration;
-        } else {
-          missedCalls++;
-        }
-      }
-    }
-  }
-
-  return { dials, totalInbound, missedCalls, connects, totalDuration };
-}
-
-// Fetch seller contacts created in date range
-async function fetchSellerContacts(start: Date, end: Date) {
-  let leads = 0; // sellers with address
-  let prospects = 0; // all sellers
-  let startAfterId = "";
-  let startAfter = 0;
-
-  for (let page = 0; page < 10; page++) {
-    let url = `${BASE}/contacts/?locationId=${LOCATION_ID()}&limit=100`;
-    if (startAfterId) {
-      url += `&startAfterId=${startAfterId}&startAfter=${startAfter}`;
-    }
-
-    const res = await fetch(url, { headers: getHeaders() });
-    if (!res.ok) break;
-    const data = await res.json();
-    const contacts = data.contacts || [];
-    if (contacts.length === 0) break;
-
-    for (const c of contacts) {
-      const created = new Date(c.dateAdded);
-      if (created < start || created > new Date(end.getTime() + 86400000)) continue;
-
-      const cfs: Record<string, string> = {};
-      for (const cf of c.customFields || []) {
-        cfs[cf.id] = cf.value;
-      }
-      const contactType = cfs[CONTACT_TYPE_FIELD] || "";
-      if (contactType === "Seller") {
-        prospects++;
-        if (c.address1 && c.address1.trim()) {
-          leads++;
-        }
-      }
-    }
-
-    const meta = data.meta || {};
-    if (!meta.nextPageUrl) break;
-    startAfterId = meta.startAfterId || "";
-    startAfter = meta.startAfter || 0;
-
-    // If we've gone past our date range, stop
-    const lastCreated = new Date(contacts[contacts.length - 1].dateAdded);
-    if (lastCreated < start) break;
-  }
-
-  return { leads, prospects };
-}
-
-// Fetch calendar events for a date range
-async function fetchAppointments(calendarId: string, start: Date, end: Date) {
-  const url = `${BASE}/calendars/events?locationId=${LOCATION_ID()}&calendarId=${calendarId}&startTime=${start.getTime()}&endTime=${end.getTime() + 86400000}`;
-  const res = await fetch(url, { headers: getHeaders() });
-  if (!res.ok) return { booked: 0, cancelled: 0, completed: 0, rescheduled: 0 };
-
-  const data = await res.json();
-  const events = data.events || [];
-
-  let booked = 0, cancelled = 0, completed = 0, rescheduled = 0;
-  for (const e of events) {
-    if (e.deleted) continue;
-    booked++;
-
-    const title = (e.title || "").toLowerCase();
-    const status = e.appointmentStatus || "";
-
-    if (status === "cancelled" || title.startsWith("c-") || title.includes("cancel")) {
-      cancelled++;
-    } else if (status === "noshow" || status === "no_show") {
-      // not completed
-    } else {
-      // Check if event is in the past (completed)
-      const eventEnd = new Date(e.endTime);
-      if (eventEnd < new Date()) {
-        completed++;
-      }
-    }
-
-    if (title.includes("reschedul")) {
-      rescheduled++;
-    }
-  }
-
-  return { booked, cancelled, completed, rescheduled };
-}
-
-// Fetch opportunities by pipeline and stage, filtered by lastStageChangeAt
-async function fetchOpportunitiesByStage(
-  pipelineId: string,
-  stageId: string,
-  start: Date,
-  end: Date
-) {
-  const results: { count: number; totalAbPrice: number; totalBcPrice: number; totalGrossProfit: number } = {
-    count: 0, totalAbPrice: 0, totalBcPrice: 0, totalGrossProfit: 0,
-  };
-
-  let hasMore = true;
-  let startAfterId = "";
-
-  while (hasMore) {
-    let url = `${BASE}/opportunities/search?location_id=${LOCATION_ID()}&pipeline_id=${pipelineId}&pipeline_stage_id=${stageId}&limit=100`;
-    if (startAfterId) {
-      url += `&startAfterId=${startAfterId}`;
-    }
-
-    const res = await fetch(url, { headers: getHeaders() });
-    if (!res.ok) break;
-    const data = await res.json();
-    const opps = data.opportunities || [];
-    if (opps.length === 0) break;
-
-    for (const o of opps) {
-      const changed = new Date(o.lastStageChangeAt);
-      if (changed >= start && changed <= new Date(end.getTime() + 86400000)) {
-        results.count++;
-
-        // Get full opportunity detail for custom fields
-        const detailRes = await fetch(`${BASE}/opportunities/${o.id}`, { headers: getHeaders() });
-        if (detailRes.ok) {
-          const detail = await detailRes.json();
-          const opp = detail.opportunity || detail;
-          for (const cf of opp.customFields || []) {
-            const val = parseFloat(cf.fieldValue || cf.fieldValueString || "0") || 0;
-            if (cf.id === OPP_FIELDS.abPrice) results.totalAbPrice += val;
-            if (cf.id === OPP_FIELDS.bcPrice) results.totalBcPrice += val;
-            if (cf.id === OPP_FIELDS.grossProfit) results.totalGrossProfit += val;
-          }
-        }
-      }
-    }
-
-    const meta = data.meta || {};
-    if (!meta.nextPageUrl && opps.length < 100) {
-      hasMore = false;
-    } else {
-      startAfterId = opps[opps.length - 1]?.id || "";
-      if (!startAfterId) hasMore = false;
-    }
-  }
-
-  return results;
-}
-
-async function buildWeekData(start: Date, end: Date): Promise<WeekData> {
-  const [
-    calls,
-    contacts,
-    inPersonAppts,
-    virtualAppts,
-    mikeOffers,
-    joshOffers,
-    abDeals,
-    settled,
-  ] = await Promise.all([
-    fetchCallsForRange(start, end),
-    fetchSellerContacts(start, end),
-    fetchAppointments(MIKE_CALENDAR, start, end),
-    fetchAppointments(JOSH_CALENDAR, start, end),
-    fetchOpportunitiesByStage(MIKE_PIPELINE, STAGES.mikeOfferMade, start, end),
-    fetchOpportunitiesByStage(JOSH_PIPELINE, STAGES.joshOffered, start, end),
-    fetchOpportunitiesByStage(DEALS_PIPELINE, STAGES.underContract, start, end),
-    fetchOpportunitiesByStage(TC_PIPELINE, STAGES.tcClosedDispo, start, end),
-  ]);
-
-  const totalCalls = calls.dials + calls.totalInbound;
-  const totalBooked = inPersonAppts.booked + virtualAppts.booked;
-
-  return {
-    startDate: start.toISOString().slice(0, 10),
-    endDate: end.toISOString().slice(0, 10),
-    dials: calls.dials,
-    totalInbound: calls.totalInbound,
-    pickUpRate: totalCalls > 0 ? Math.round((calls.connects / totalCalls) * 10000) / 100 : 0,
-    missedCalls: calls.missedCalls,
-    connects: calls.connects,
-    avgCallDuration: calls.connects > 0 ? Math.round(calls.totalDuration / calls.connects) : 0,
-    connectRate: totalCalls > 0 ? Math.round((calls.connects / totalCalls) * 10000) / 100 : 0,
-    leads: contacts.leads,
-    prospects: contacts.prospects,
-    bookingPct: contacts.prospects > 0 ? Math.round((totalBooked / contacts.prospects) * 10000) / 100 : 0,
-    inPersonBooked: inPersonAppts.booked,
-    virtualBooked: virtualAppts.booked,
-    cancelledInPerson: inPersonAppts.cancelled,
-    cancelledVirtual: virtualAppts.cancelled,
-    rescheduled: inPersonAppts.rescheduled + virtualAppts.rescheduled,
-    inPersonCompleted: inPersonAppts.completed,
-    virtualCompleted: virtualAppts.completed,
-    showRateInPerson: inPersonAppts.booked > 0
-      ? Math.round((inPersonAppts.completed / inPersonAppts.booked) * 10000) / 100 : 0,
-    showRateVirtual: virtualAppts.booked > 0
-      ? Math.round((virtualAppts.completed / virtualAppts.booked) * 10000) / 100 : 0,
-    inPersonOffers: mikeOffers.count,
-    virtualOffers: joshOffers.count,
-    abSigned: abDeals.count,
-    bcSigned: 0, // TODO: could track B-C specific stage
-    settled: settled.count,
-    grossProfit: settled.totalGrossProfit || (settled.totalBcPrice - settled.totalAbPrice),
-    netProfit: 0, // calculated from gross minus expenses
-  };
-}
-
-export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const weekParam = searchParams.get("week"); // optional: specific week "2026-01-05"
-
+export async function GET() {
   try {
     if (!process.env.GHL_API_TOKEN || !process.env.GHL_LOCATION_ID) {
       return NextResponse.json({ error: "Missing env vars" }, { status: 500 });
     }
 
-    if (weekParam) {
-      // Single week
-      const start = new Date(weekParam + "T00:00:00Z");
-      const end = new Date(start);
-      end.setDate(end.getDate() + 6);
-      const data = await buildWeekData(start, end);
-      return NextResponse.json({ weeks: [data], lastUpdated: new Date().toISOString() });
-    }
-
-    // All weeks in 2026
     const weeks = getWeeks2026();
 
-    // Process weeks in parallel batches of 2 to avoid rate limits
-    const allWeekData: WeekData[] = [];
-    const batchSize = 2;
-    for (let i = 0; i < weeks.length; i += batchSize) {
-      const batch = weeks.slice(i, i + batchSize);
-      const results = await Promise.all(
-        batch.map((w) => buildWeekData(w.start, w.end))
-      );
-      allWeekData.push(...results);
-    }
+    // Fetch all data in parallel
+    console.log("Scorecard: fetching all GHL data...");
+    const [allCalls, allSellers, allAppts, allOpps] = await Promise.all([
+      fetchAllCalls2026(),
+      fetchAllSellerContacts2026(),
+      fetchAllAppointments2026(),
+      fetchAllOpportunities2026(),
+    ]);
+    console.log(`Scorecard: ${allCalls.length} calls, ${allSellers.length} sellers, ${allAppts.length} appts, ${allOpps.length} opps`);
+
+    // Bucket data by week
+    const weekData: WeekData[] = weeks.map((w) => {
+      // Calls for this week
+      const weekCalls = allCalls.filter((c) => {
+        const wk = findWeekKey(new Date(c.date), weeks);
+        return wk === w.key;
+      });
+      const dials = weekCalls.filter((c) => c.direction === "outbound").length;
+      const totalInbound = weekCalls.filter((c) => c.direction === "inbound").length;
+      const totalCallCount = dials + totalInbound;
+      const connects = weekCalls.filter((c) => c.connected).length;
+      const missedCalls = totalCallCount - connects;
+      const connectedCalls = weekCalls.filter((c) => c.connected);
+      const totalDuration = connectedCalls.reduce((a, c) => a + c.duration, 0);
+      const avgCallDuration = connectedCalls.length > 0 ? Math.round(totalDuration / connectedCalls.length) : 0;
+
+      // Contacts for this week
+      const weekSellers = allSellers.filter((s) => {
+        const wk = findWeekKey(new Date(s.dateAdded), weeks);
+        return wk === w.key;
+      });
+      const leads = weekSellers.filter((s) => s.hasAddress).length;
+      const prospects = weekSellers.length;
+
+      // Appointments for this week
+      const weekAppts = allAppts.filter((a) => {
+        const wk = findWeekKey(new Date(a.date), weeks);
+        return wk === w.key;
+      });
+      const inPersonAppts = weekAppts.filter((a) => a.calendarId === MIKE_CALENDAR);
+      const virtualAppts = weekAppts.filter((a) => a.calendarId === JOSH_CALENDAR);
+
+      const inPersonBooked = inPersonAppts.length;
+      const virtualBooked = virtualAppts.length;
+      const cancelledInPerson = inPersonAppts.filter((a) => a.cancelled).length;
+      const cancelledVirtual = virtualAppts.filter((a) => a.cancelled).length;
+      const rescheduled = weekAppts.filter((a) => a.rescheduled).length;
+      const inPersonCompleted = inPersonAppts.filter((a) => a.completed).length;
+      const virtualCompleted = virtualAppts.filter((a) => a.completed).length;
+
+      const totalBooked = inPersonBooked + virtualBooked;
+
+      // Opportunities for this week
+      const weekOpps = allOpps.filter((o) => {
+        const wk = findWeekKey(new Date(o.stageChangedAt), weeks);
+        return wk === w.key;
+      });
+
+      const inPersonOffers = weekOpps.filter((o) => o.pipeline === MIKE_PIPELINE && o.stageId === STAGES.mikeOfferMade).length;
+      const virtualOffers = weekOpps.filter((o) => o.pipeline === JOSH_PIPELINE && o.stageId === STAGES.joshOffered).length;
+      const abSigned = weekOpps.filter((o) => o.pipeline === DEALS_PIPELINE && o.stageId === STAGES.underContract).length;
+      const settledOpps = weekOpps.filter((o) => o.pipeline === TC_PIPELINE && o.stageId === STAGES.tcClosedDispo);
+      const settled = settledOpps.length;
+      const grossProfit = settledOpps.reduce((a, o) => a + (o.grossProfit || (o.bcPrice - o.abPrice)), 0);
+
+      return {
+        startDate: w.start.toISOString().slice(0, 10),
+        endDate: w.end.toISOString().slice(0, 10),
+        dials,
+        totalInbound,
+        pickUpRate: totalCallCount > 0 ? Math.round((connects / totalCallCount) * 10000) / 100 : 0,
+        missedCalls,
+        connects,
+        avgCallDuration,
+        connectRate: totalCallCount > 0 ? Math.round((connects / totalCallCount) * 10000) / 100 : 0,
+        leads,
+        prospects,
+        bookingPct: prospects > 0 ? Math.round((totalBooked / prospects) * 10000) / 100 : 0,
+        inPersonBooked,
+        virtualBooked,
+        cancelledInPerson,
+        cancelledVirtual,
+        rescheduled,
+        inPersonCompleted,
+        virtualCompleted,
+        showRateInPerson: inPersonBooked > 0 ? Math.round((inPersonCompleted / inPersonBooked) * 10000) / 100 : 0,
+        showRateVirtual: virtualBooked > 0 ? Math.round((virtualCompleted / virtualBooked) * 10000) / 100 : 0,
+        inPersonOffers,
+        virtualOffers,
+        abSigned,
+        bcSigned: 0,
+        settled,
+        grossProfit,
+        netProfit: 0,
+      };
+    });
 
     return NextResponse.json({
-      weeks: allWeekData,
+      weeks: weekData,
       lastUpdated: new Date().toISOString(),
     });
   } catch (error) {
