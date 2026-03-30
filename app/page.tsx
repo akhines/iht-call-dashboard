@@ -243,7 +243,11 @@ export default function Dashboard() {
           </div>
         </div>
         <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
-          <button className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium bg-white/10 text-white"><ChartIcon /> Dashboard</button>
+          <button className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium bg-white/10 text-white"><ChartIcon /> Call Dashboard</button>
+          <a href="/scorecard" className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-400 hover:text-white hover:bg-white/5">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+            Ops Scorecard
+          </a>
 
           <div className="pt-4 pb-2 px-3"><p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Date Range</p></div>
           {([["today", "Today"], ["yesterday", "Yesterday"], ["week", "This Week"], ["month", "This Month"], ["quarter", "This Quarter"], ["year", "Year to Date"]] as const).map(([v, l]) => (
