@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
-  ResponsiveContainer, LineChart, Line,
+  ResponsiveContainer, PieChart, Pie, Cell,
 } from "recharts";
 
 interface SourceBreakdown { [source: string]: number; }
@@ -219,13 +219,26 @@ export default function ScorecardPage() {
     Settled: w.settled,
   })), [weeks]);
 
-  const rateChartData = useMemo(() => weeks.map((w) => ({
-    week: fmtDate(w.startDate),
-    "Connect %": w.connectRate,
-    "Book %": w.bookingPct,
-    "Show % IP": w.showRateInPerson,
-    "Show % V": w.showRateVirtual,
-  })), [weeks]);
+  // Aggregate source breakdowns across all weeks for pie charts
+  const PIE_COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#06b6d4", "#84cc16"];
+
+  const apptsByChannelPie = useMemo(() => {
+    const totals: Record<string, number> = {};
+    weeks.forEach((w) => { Object.entries(w.apptsBySource || {}).forEach(([s, n]) => { totals[s] = (totals[s] || 0) + n; }); });
+    return Object.entries(totals).filter(([, v]) => v > 0).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
+  }, [weeks]);
+
+  const abByChannelPie = useMemo(() => {
+    const totals: Record<string, number> = {};
+    weeks.forEach((w) => { Object.entries(w.abBySource || {}).forEach(([s, n]) => { totals[s] = (totals[s] || 0) + n; }); });
+    return Object.entries(totals).filter(([, v]) => v > 0).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
+  }, [weeks]);
+
+  const leadsByChannelPie = useMemo(() => {
+    const totals: Record<string, number> = {};
+    weeks.forEach((w) => { Object.entries(w.leadsBySource || {}).forEach(([s, n]) => { totals[s] = (totals[s] || 0) + n; }); });
+    return Object.entries(totals).filter(([, v]) => v > 0).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
+  }, [weeks]);
 
   if (loading) {
     return (
@@ -403,41 +416,50 @@ export default function ScorecardPage() {
             </div>
           </div>
 
-          {/* Trend Charts */}
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
-              <h3 className="text-sm font-semibold text-gray-700 mb-4">Weekly Volume Trends</h3>
-              <ResponsiveContainer width="100%" height={280}>
-                <BarChart data={chartData} barGap={2}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                  <XAxis dataKey="week" tick={{ fontSize: 10 }} />
-                  <YAxis tick={{ fontSize: 10 }} allowDecimals={false} />
-                  <Tooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} />
-                  <Legend wrapperStyle={{ fontSize: 11 }} />
-                  <Bar dataKey="Leads" fill="#10b981" radius={[2, 2, 0, 0]} />
-                  <Bar dataKey="Connects" fill="#3b82f6" radius={[2, 2, 0, 0]} />
-                  <Bar dataKey="IP Appts" fill="#f59e0b" radius={[2, 2, 0, 0]} />
-                  <Bar dataKey="V Appts" fill="#8b5cf6" radius={[2, 2, 0, 0]} />
-                  <Bar dataKey="A-B" fill="#ef4444" radius={[2, 2, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
-              <h3 className="text-sm font-semibold text-gray-700 mb-4">Conversion Rate Trends</h3>
-              <ResponsiveContainer width="100%" height={280}>
-                <LineChart data={rateChartData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                  <XAxis dataKey="week" tick={{ fontSize: 10 }} />
-                  <YAxis tick={{ fontSize: 10 }} unit="%" />
-                  <Tooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} formatter={(v: unknown) => `${Number(v).toFixed(1)}%`} />
-                  <Legend wrapperStyle={{ fontSize: 11 }} />
-                  <Line type="monotone" dataKey="Connect %" stroke="#3b82f6" strokeWidth={2} dot={{ r: 3 }} />
-                  <Line type="monotone" dataKey="Book %" stroke="#10b981" strokeWidth={2} dot={{ r: 3 }} />
-                  <Line type="monotone" dataKey="Show% IP" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3 }} />
-                  <Line type="monotone" dataKey="Show% V" stroke="#8b5cf6" strokeWidth={2} dot={{ r: 3 }} />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
+          {/* Weekly Volume Chart */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+            <h3 className="text-sm font-semibold text-gray-700 mb-4">Weekly Volume Trends</h3>
+            <ResponsiveContainer width="100%" height={350}>
+              <BarChart data={chartData} barGap={2}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                <XAxis dataKey="week" tick={{ fontSize: 10 }} />
+                <YAxis tick={{ fontSize: 10 }} allowDecimals={false} />
+                <Tooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                <Bar dataKey="Leads" fill="#10b981" radius={[2, 2, 0, 0]} />
+                <Bar dataKey="Connects" fill="#3b82f6" radius={[2, 2, 0, 0]} />
+                <Bar dataKey="IP Appts" fill="#f59e0b" radius={[2, 2, 0, 0]} />
+                <Bar dataKey="V Appts" fill="#8b5cf6" radius={[2, 2, 0, 0]} />
+                <Bar dataKey="A-B" fill="#ef4444" radius={[2, 2, 0, 0]} />
+                <Bar dataKey="Settled" fill="#06b6d4" radius={[2, 2, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Pie Charts - Channel Breakdowns */}
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+            {[
+              { title: "Leads by Channel", data: leadsByChannelPie },
+              { title: "Appointments by Channel", data: apptsByChannelPie },
+              { title: "A-B Signed by Channel", data: abByChannelPie },
+            ].map(({ title, data: pieData }) => (
+              <div key={title} className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+                <h3 className="text-sm font-semibold text-gray-700 mb-4">{title}</h3>
+                {pieData.length > 0 ? (
+                  <ResponsiveContainer width="100%" height={250}>
+                    <PieChart>
+                      <Pie data={pieData} cx="50%" cy="50%" innerRadius={45} outerRadius={80} dataKey="value" paddingAngle={3}
+                        label={(props: { name?: string; percent?: number }) => `${props.name || ""} ${((props.percent || 0) * 100).toFixed(0)}%`}>
+                        {pieData.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
+                      </Pie>
+                      <Tooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <p className="text-gray-400 text-sm text-center py-10">No data yet</p>
+                )}
+              </div>
+            ))}
           </div>
         </div>
       </main>
