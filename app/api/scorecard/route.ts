@@ -21,14 +21,14 @@ const JOSH_CALENDAR = "19xfzyb7vedvmzqNf8FK";
 // Pipeline IDs
 const MIKE_PIPELINE = "nwSjS0rUTMGbgDvyrEe4";
 const JOSH_PIPELINE = "ggnBpwig6OE37fXPQv7a";
-const DEALS_PIPELINE = "DiGXnGTlQCOMZQJmWQe9";
+// const DEALS_PIPELINE = "DiGXnGTlQCOMZQJmWQe9";
 const TC_PIPELINE = "ofMQolXiKGyg6WNOJS88";
 
 // Stage IDs
 const STAGES = {
   mikeOfferMade: "cdd65b88-c954-4f80-bd23-3d4dced615ad",
   joshOffered: "d6a230e1-fc7d-4881-b238-70b83230dfc4",
-  underContract: "c72967b1-115d-4ee5-8b27-c3a60d67137a",
+  tcBcAssigned: "79163384-97f7-4b12-a3ca-a15c092f04f4",
   tcClosedDispo: "8464b838-cb2d-497a-89f6-07c4025ae17f",
 };
 
@@ -155,6 +155,7 @@ async function fetchAllCalls2026(): Promise<CallRecord[]> {
 interface SellerContact {
   dateAdded: number;
   hasAddress: boolean;
+  source: string;
 }
 
 async function fetchAllSellerContacts2026(): Promise<SellerContact[]> {
@@ -183,6 +184,7 @@ async function fetchAllSellerContacts2026(): Promise<SellerContact[]> {
         sellers.push({
           dateAdded: created,
           hasAddress: !!(c.address1 && c.address1.trim()),
+          source: c.source || "",
         });
       }
     }
@@ -206,6 +208,7 @@ interface ApptRecord {
   cancelled: boolean;
   completed: boolean;
   rescheduled: boolean;
+  title: string;
 }
 
 async function fetchAllAppointments2026(): Promise<ApptRecord[]> {
@@ -234,6 +237,7 @@ async function fetchAllAppointments2026(): Promise<ApptRecord[]> {
         cancelled,
         completed,
         rescheduled: title.includes("reschedul"),
+        title: e.title || "",
       });
     }
   }
@@ -242,75 +246,94 @@ async function fetchAllAppointments2026(): Promise<ApptRecord[]> {
 }
 
 interface OppRecord {
-  stageChangedAt: number;
-  pipeline: string;
-  stageId: string;
+  date: number; // the date to bucket by
+  category: "offer_mike" | "offer_josh" | "ab_signed" | "bc_signed" | "settled";
+  name: string;
+  source: string;
   abPrice: number;
   bcPrice: number;
   grossProfit: number;
 }
 
+async function fetchOppsByStage(pipelineId: string, stageId: string): Promise<{ id: string; name: string; source: string; lastStageChangeAt: string; createdAt: string }[]> {
+  const results: { id: string; name: string; source: string; lastStageChangeAt: string; createdAt: string }[] = [];
+  const url = `${BASE}/opportunities/search?location_id=${LOCATION_ID()}&pipeline_id=${pipelineId}&pipeline_stage_id=${stageId}&limit=100`;
+  const res = await fetch(url, { headers: getHeaders() });
+  if (!res.ok) return results;
+  const data = await res.json();
+  for (const o of data.opportunities || []) {
+    results.push({ id: o.id, name: o.name || "", source: o.source || "", lastStageChangeAt: o.lastStageChangeAt, createdAt: o.createdAt });
+  }
+  return results;
+}
+
 async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
   const opps: OppRecord[] = [];
 
-  const queries = [
-    { pipeline: MIKE_PIPELINE, stage: STAGES.mikeOfferMade },
-    { pipeline: JOSH_PIPELINE, stage: STAGES.joshOffered },
-    { pipeline: DEALS_PIPELINE, stage: STAGES.underContract },
-    { pipeline: TC_PIPELINE, stage: STAGES.tcClosedDispo },
-  ];
+  // Offers: Mike "Offer Made" and Josh "Offered" - use lastStageChangeAt
+  const [mikeOffers, joshOffers, bcAssigned, closedDispo] = await Promise.all([
+    fetchOppsByStage(MIKE_PIPELINE, STAGES.mikeOfferMade),
+    fetchOppsByStage(JOSH_PIPELINE, STAGES.joshOffered),
+    fetchOppsByStage(TC_PIPELINE, STAGES.tcBcAssigned),
+    fetchOppsByStage(TC_PIPELINE, STAGES.tcClosedDispo),
+  ]);
 
-  for (const q of queries) {
-    let hasMore = true;
-    let pageNum = 0;
+  for (const o of mikeOffers) {
+    const d = new Date(o.lastStageChangeAt).getTime();
+    if (d >= JAN1_2026) opps.push({ date: d, category: "offer_mike", name: o.name, source: o.source, abPrice: 0, bcPrice: 0, grossProfit: 0 });
+  }
+  for (const o of joshOffers) {
+    const d = new Date(o.lastStageChangeAt).getTime();
+    if (d >= JAN1_2026) opps.push({ date: d, category: "offer_josh", name: o.name, source: o.source, abPrice: 0, bcPrice: 0, grossProfit: 0 });
+  }
 
-    while (hasMore && pageNum < 10) {
-      const url = `${BASE}/opportunities/search?location_id=${LOCATION_ID()}&pipeline_id=${q.pipeline}&pipeline_stage_id=${q.stage}&limit=100`;
-      const res = await fetch(url, { headers: getHeaders() });
-      if (!res.ok) break;
-      const data = await res.json();
-      const opportunities = data.opportunities || [];
-
-      for (const o of opportunities) {
-        const changed = new Date(o.lastStageChangeAt).getTime();
-        if (changed < JAN1_2026) continue;
-
-        let abPrice = 0, bcPrice = 0, grossProfit = 0;
-
-        // For settled deals, fetch full detail for pricing
-        if (q.stage === STAGES.tcClosedDispo) {
-          const detailRes = await fetch(`${BASE}/opportunities/${o.id}`, { headers: getHeaders() });
-          if (detailRes.ok) {
-            const detail = await detailRes.json();
-            const opp = detail.opportunity || detail;
-            for (const cf of opp.customFields || []) {
-              const val = parseFloat(cf.fieldValue || cf.fieldValueString || "0") || 0;
-              if (cf.id === OPP_FIELDS.abPrice) abPrice = val;
-              if (cf.id === OPP_FIELDS.bcPrice) bcPrice = val;
-              if (cf.id === OPP_FIELDS.grossProfit) grossProfit = val;
-            }
-          }
-        }
-
-        opps.push({
-          stageChangedAt: changed,
-          pipeline: q.pipeline,
-          stageId: q.stage,
-          abPrice,
-          bcPrice,
-          grossProfit,
-        });
+  // A-B signed: ALL TC pipeline opps, use createdAt as the date they entered TC
+  const tcAllUrl = `${BASE}/opportunities/search?location_id=${LOCATION_ID()}&pipeline_id=${TC_PIPELINE}&limit=100`;
+  const tcAllRes = await fetch(tcAllUrl, { headers: getHeaders() });
+  if (tcAllRes.ok) {
+    const tcData = await tcAllRes.json();
+    for (const o of tcData.opportunities || []) {
+      const d = new Date(o.createdAt).getTime();
+      if (d >= JAN1_2026) {
+        opps.push({ date: d, category: "ab_signed", name: o.name || "", source: o.source || "", abPrice: 0, bcPrice: 0, grossProfit: 0 });
       }
-
-      if (opportunities.length < 100) hasMore = false;
-      pageNum++;
     }
+  }
+
+  // B-C signed: TC "B-C Assigned" stage, use lastStageChangeAt
+  for (const o of bcAssigned) {
+    const d = new Date(o.lastStageChangeAt).getTime();
+    if (d >= JAN1_2026) opps.push({ date: d, category: "bc_signed", name: o.name, source: o.source, abPrice: 0, bcPrice: 0, grossProfit: 0 });
+  }
+
+  // Settled: TC "Closed - Dispo Complete", fetch detail for pricing
+  for (const o of closedDispo) {
+    const d = new Date(o.lastStageChangeAt).getTime();
+    if (d < JAN1_2026) continue;
+
+    let abPrice = 0, bcPrice = 0, grossProfit = 0;
+    const detailRes = await fetch(`${BASE}/opportunities/${o.id}`, { headers: getHeaders() });
+    if (detailRes.ok) {
+      const detail = await detailRes.json();
+      const opp = detail.opportunity || detail;
+      for (const cf of opp.customFields || []) {
+        const val = parseFloat(cf.fieldValue || cf.fieldValueString || "0") || 0;
+        if (cf.id === OPP_FIELDS.abPrice) abPrice = val;
+        if (cf.id === OPP_FIELDS.bcPrice) bcPrice = val;
+        if (cf.id === OPP_FIELDS.grossProfit) grossProfit = val;
+      }
+    }
+    opps.push({ date: d, category: "settled", name: o.name, source: o.source, abPrice, bcPrice, grossProfit });
   }
 
   return opps;
 }
 
 // ============ BUILD WEEKLY SCORECARD ============
+
+interface SourceBreakdown {
+  [source: string]: number;
+}
 
 export interface WeekData {
   startDate: string;
@@ -341,6 +364,9 @@ export interface WeekData {
   settled: number;
   grossProfit: number;
   netProfit: number;
+  // Source breakdowns for drilldowns
+  leadsBySource: SourceBreakdown;
+  apptsBySource: SourceBreakdown;
 }
 
 export async function GET() {
@@ -405,16 +431,36 @@ export async function GET() {
 
       // Opportunities for this week
       const weekOpps = allOpps.filter((o) => {
-        const wk = findWeekKey(new Date(o.stageChangedAt), weeks);
+        const wk = findWeekKey(new Date(o.date), weeks);
         return wk === w.key;
       });
 
-      const inPersonOffers = weekOpps.filter((o) => o.pipeline === MIKE_PIPELINE && o.stageId === STAGES.mikeOfferMade).length;
-      const virtualOffers = weekOpps.filter((o) => o.pipeline === JOSH_PIPELINE && o.stageId === STAGES.joshOffered).length;
-      const abSigned = weekOpps.filter((o) => o.pipeline === DEALS_PIPELINE && o.stageId === STAGES.underContract).length;
-      const settledOpps = weekOpps.filter((o) => o.pipeline === TC_PIPELINE && o.stageId === STAGES.tcClosedDispo);
+      const inPersonOffers = weekOpps.filter((o) => o.category === "offer_mike").length;
+      const virtualOffers = weekOpps.filter((o) => o.category === "offer_josh").length;
+      const abSigned = weekOpps.filter((o) => o.category === "ab_signed").length;
+      const bcSigned = weekOpps.filter((o) => o.category === "bc_signed").length;
+      const settledOpps = weekOpps.filter((o) => o.category === "settled");
       const settled = settledOpps.length;
       const grossProfit = settledOpps.reduce((a, o) => a + (o.grossProfit || (o.bcPrice - o.abPrice)), 0);
+
+      // Source breakdowns
+      const leadsBySource: SourceBreakdown = {};
+      weekSellers.filter((s) => s.hasAddress).forEach((s) => {
+        const src = s.source || "Unknown";
+        leadsBySource[src] = (leadsBySource[src] || 0) + 1;
+      });
+
+      const apptsBySource: SourceBreakdown = {};
+      weekAppts.filter((a) => !a.cancelled).forEach((a) => {
+        // Extract source from appointment title (e.g. "*TV" suffix)
+        const t = a.title;
+        let src = "Other";
+        if (t.includes("*TV") || t.includes("*tv")) src = "TV";
+        else if (t.includes("*DM") || t.includes("Direct Mail")) src = "Direct Mail";
+        else if (t.includes("PPC") || t.includes("Google")) src = "Google Ads";
+        else if (t.includes("SEO")) src = "SEO";
+        apptsBySource[src] = (apptsBySource[src] || 0) + 1;
+      });
 
       return {
         startDate: w.start.toISOString().slice(0, 10),
@@ -441,10 +487,12 @@ export async function GET() {
         inPersonOffers,
         virtualOffers,
         abSigned,
-        bcSigned: 0,
+        bcSigned,
         settled,
         grossProfit,
         netProfit: 0,
+        leadsBySource,
+        apptsBySource,
       };
     });
 

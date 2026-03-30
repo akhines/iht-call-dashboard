@@ -31,6 +31,8 @@ interface WeekData {
   settled: number;
   grossProfit: number;
   netProfit: number;
+  leadsBySource: Record<string, number>;
+  apptsBySource: Record<string, number>;
 }
 
 type ColFmt = (v: number | string) => string;
@@ -153,8 +155,37 @@ function computeAverages(weeks: WeekData[]): Record<string, number | string> {
 
 const RefreshIcon = () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>;
 
+function DrilldownModal({ title, data, onClose }: { title: string; data: Record<string, number>; onClose: () => void }) {
+  const entries = Object.entries(data).sort((a, b) => b[1] - a[1]);
+  const total = entries.reduce((a, [, v]) => a + v, 0);
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-xl p-6 max-w-md w-full mx-4" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-bold text-gray-900">{title}</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl">&times;</button>
+        </div>
+        <table className="w-full text-sm">
+          <thead><tr className="border-b border-gray-100"><th className="text-left py-2 text-gray-500">Source</th><th className="text-right py-2 text-gray-500">Count</th><th className="text-right py-2 text-gray-500">%</th></tr></thead>
+          <tbody>
+            {entries.map(([source, count]) => (
+              <tr key={source} className="border-b border-gray-50">
+                <td className="py-2 text-gray-800">{source || "Unknown"}</td>
+                <td className="py-2 text-right font-medium">{count}</td>
+                <td className="py-2 text-right text-gray-500">{total > 0 ? Math.round((count / total) * 100) : 0}%</td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot><tr className="border-t-2 border-gray-200"><td className="py-2 font-bold">Total</td><td className="py-2 text-right font-bold">{total}</td><td className="py-2 text-right font-bold">100%</td></tr></tfoot>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 export default function ScorecardPage() {
   const [weeks, setWeeks] = useState<WeekData[]>([]);
+  const [drilldown, setDrilldown] = useState<{ title: string; data: Record<string, number> } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [lastUpdated, setLastUpdated] = useState("");
@@ -189,13 +220,26 @@ export default function ScorecardPage() {
     );
   }
 
-  function renderCell(row: Record<string, number | string>, col: Column, isSummary = false) {
+  function renderCell(row: Record<string, number | string>, col: Column, isSummary = false, weekIdx?: number) {
     const val = row[col.key];
     if (col.key === "startDate" || col.key === "endDate") {
       if (isSummary) return <span className="font-bold text-gray-900">{val}</span>;
       return <span className="text-gray-700">{col.fmt ? col.fmt(val) : val}</span>;
     }
     const display = col.fmt ? col.fmt(val) : Number(val).toLocaleString();
+    const num = Number(val);
+
+    // Make leads and appointments clickable for source drilldown
+    if (!isSummary && weekIdx !== undefined && num > 0) {
+      const week = weeks[weekIdx];
+      if (col.key === "leads" && week?.leadsBySource) {
+        return <button onClick={() => setDrilldown({ title: `Leads - Week of ${fmtDate(week.startDate)}`, data: week.leadsBySource })} className="text-blue-600 hover:text-blue-800 underline cursor-pointer font-medium">{display}</button>;
+      }
+      if ((col.key === "inPersonBooked" || col.key === "virtualBooked") && week?.apptsBySource) {
+        return <button onClick={() => setDrilldown({ title: `Appointments - Week of ${fmtDate(week.startDate)}`, data: week.apptsBySource })} className="text-blue-600 hover:text-blue-800 underline cursor-pointer font-medium">{display}</button>;
+      }
+    }
+
     return <span className={isSummary ? "font-bold" : ""}>{display}</span>;
   }
 
@@ -271,7 +315,7 @@ export default function ScorecardPage() {
                     <tr key={i} className="hover:bg-blue-50/30 transition border-b border-gray-50">
                       {allColumns.map((col) => (
                         <td key={col.key} className="px-3 py-2 whitespace-nowrap text-center border-r border-gray-50">
-                          {renderCell(week as unknown as Record<string, number | string>, col)}
+                          {renderCell(week as unknown as Record<string, number | string>, col, false, i)}
                         </td>
                       ))}
                     </tr>
@@ -304,6 +348,7 @@ export default function ScorecardPage() {
           </div>
         </div>
       </main>
+      {drilldown && <DrilldownModal title={drilldown.title} data={drilldown.data} onClose={() => setDrilldown(null)} />}
     </div>
   );
 }
