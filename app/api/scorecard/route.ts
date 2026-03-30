@@ -35,7 +35,7 @@ const JOSH_CALENDAR = "19xfzyb7vedvmzqNf8FK";
 // Pipeline IDs
 const MIKE_PIPELINE = "nwSjS0rUTMGbgDvyrEe4";
 const JOSH_PIPELINE = "ggnBpwig6OE37fXPQv7a";
-// const DEALS_PIPELINE = "DiGXnGTlQCOMZQJmWQe9";
+const DEALS_PIPELINE = "DiGXnGTlQCOMZQJmWQe9";
 const TC_PIPELINE = "ofMQolXiKGyg6WNOJS88";
 
 // Stage IDs
@@ -44,6 +44,7 @@ const STAGES = {
   joshOffered: "d6a230e1-fc7d-4881-b238-70b83230dfc4",
   tcBcAssigned: "79163384-97f7-4b12-a3ca-a15c092f04f4",
   tcClosedDispo: "8464b838-cb2d-497a-89f6-07c4025ae17f",
+  dealsClosedDeal: "245bc5b3-e2ac-4886-8928-907560ec3f15",
 };
 
 // Profit comes from monetaryValue on the opportunity
@@ -316,14 +317,16 @@ interface OppRecord {
   monetaryValue: number;
 }
 
-async function fetchOppsByStage(pipelineId: string, stageId: string): Promise<{ id: string; name: string; source: string; contactId: string; lastStageChangeAt: string; createdAt: string }[]> {
-  const results: { id: string; name: string; source: string; contactId: string; lastStageChangeAt: string; createdAt: string }[] = [];
+interface OppSearchResult { id: string; name: string; source: string; contactId: string; lastStageChangeAt: string; createdAt: string; monetaryValue: number; }
+
+async function fetchOppsByStage(pipelineId: string, stageId: string): Promise<OppSearchResult[]> {
+  const results: OppSearchResult[] = [];
   const url = `${BASE}/opportunities/search?location_id=${LOCATION_ID()}&pipeline_id=${pipelineId}&pipeline_stage_id=${stageId}&limit=100`;
   const res = await fetch(url, { headers: getHeaders() });
   if (!res.ok) return results;
   const data = await res.json();
   for (const o of data.opportunities || []) {
-    results.push({ id: o.id, name: o.name || "", source: o.source || "", contactId: o.contactId || "", lastStageChangeAt: o.lastStageChangeAt, createdAt: o.createdAt });
+    results.push({ id: o.id, name: o.name || "", source: o.source || "", contactId: o.contactId || "", lastStageChangeAt: o.lastStageChangeAt, createdAt: o.createdAt, monetaryValue: o.monetaryValue || 0 });
   }
   return results;
 }
@@ -332,11 +335,11 @@ async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
   const opps: OppRecord[] = [];
 
   // Offers: Mike "Offer Made" and Josh "Offered" - use lastStageChangeAt
-  const [mikeOffers, joshOffers, bcAssigned, closedDispo] = await Promise.all([
+  const [mikeOffers, joshOffers, bcAssigned, closedDeals] = await Promise.all([
     fetchOppsByStage(MIKE_PIPELINE, STAGES.mikeOfferMade),
     fetchOppsByStage(JOSH_PIPELINE, STAGES.joshOffered),
     fetchOppsByStage(TC_PIPELINE, STAGES.tcBcAssigned),
-    fetchOppsByStage(TC_PIPELINE, STAGES.tcClosedDispo),
+    fetchOppsByStage(DEALS_PIPELINE, STAGES.dealsClosedDeal),
   ]);
 
   for (const o of mikeOffers) {
@@ -373,20 +376,13 @@ async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
     if (d >= JAN1_2026) opps.push({ date: d, category: "bc_signed", closer: isMike ? "Mike" : "Josh", name: o.name, source: src, monetaryValue: 0 });
   }
 
-  // Settled: TC "Closed - Dispo Complete", profit = monetaryValue
-  for (const o of closedDispo) {
+  // Settled: Deals pipeline > Closed Deal, profit = monetaryValue (opportunity value)
+  for (const o of closedDeals) {
     const d = new Date(o.lastStageChangeAt).getTime();
     if (d < JAN1_2026) continue;
     const src = o.contactId ? await getContactSource(o.contactId) : o.source;
     const isMike = mikeOffers.some((m) => m.contactId === o.contactId);
-    // Fetch monetaryValue from the full opportunity detail
-    let monetaryValue = 0;
-    const detailRes = await fetch(`${BASE}/opportunities/${o.id}`, { headers: getHeaders() });
-    if (detailRes.ok) {
-      const detail = await detailRes.json();
-      monetaryValue = (detail.opportunity || detail).monetaryValue || 0;
-    }
-    opps.push({ date: d, category: "settled", closer: isMike ? "Mike" : "Josh", name: o.name, source: src, monetaryValue });
+    opps.push({ date: d, category: "settled", closer: isMike ? "Mike" : "Josh", name: o.name, source: src, monetaryValue: o.monetaryValue });
   }
 
   return opps;

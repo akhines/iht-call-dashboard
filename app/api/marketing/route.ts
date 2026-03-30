@@ -214,8 +214,9 @@ async function fetchAllDeals(): Promise<DealRecord[]> {
     }
   }
 
-  // Settled = TC Closed Dispo, profit = monetaryValue
-  const settledRes = await fetch(`${BASE}/opportunities/search?location_id=${LOCATION_ID()}&pipeline_id=${TC_PIPELINE}&pipeline_stage_id=8464b838-cb2d-497a-89f6-07c4025ae17f&limit=100`, { headers: getHeaders() });
+  // Settled = Deals pipeline > Closed Deal, profit = monetaryValue (opportunity value)
+  const DEALS_PIPELINE = "DiGXnGTlQCOMZQJmWQe9";
+  const settledRes = await fetch(`${BASE}/opportunities/search?location_id=${LOCATION_ID()}&pipeline_id=${DEALS_PIPELINE}&pipeline_stage_id=245bc5b3-e2ac-4886-8928-907560ec3f15&limit=100`, { headers: getHeaders() });
   if (settledRes.ok) {
     const data = await settledRes.json();
     for (const o of data.opportunities || []) {
