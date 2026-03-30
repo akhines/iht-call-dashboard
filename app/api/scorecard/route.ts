@@ -219,10 +219,30 @@ async function fetchAllSellerContacts2026(): Promise<SellerContact[]> {
 interface ApptRecord {
   date: number;
   calendarId: string;
+  closer: string; // "Mike" or "Josh"
   cancelled: boolean;
   completed: boolean;
   rescheduled: boolean;
+  source: string;
   title: string;
+}
+
+const MARKETING_CAMPAIGN_FIELD = "4fOhwf1m5nhK1c9vI6SJ";
+const contactSourceCache = new Map<string, string>();
+
+async function getContactSource(contactId: string): Promise<string> {
+  if (!contactId) return "Other";
+  if (contactSourceCache.has(contactId)) return contactSourceCache.get(contactId)!;
+  const res = await fetch(`${BASE}/contacts/${contactId}`, { headers: getHeaders() });
+  if (!res.ok) { contactSourceCache.set(contactId, "Other"); return "Other"; }
+  const data = await res.json();
+  const c = data.contact || {};
+  const cfs: Record<string, string> = {};
+  for (const cf of c.customFields || []) cfs[cf.id] = cf.value;
+  const campaign = cfs[MARKETING_CAMPAIGN_FIELD] || "";
+  const src = c.source || campaign || "Other";
+  contactSourceCache.set(contactId, src);
+  return src;
 }
 
 async function fetchAllAppointments2026(): Promise<ApptRecord[]> {
@@ -230,28 +250,37 @@ async function fetchAllAppointments2026(): Promise<ApptRecord[]> {
   const now = Date.now();
 
   for (const calId of [MIKE_CALENDAR, JOSH_CALENDAR]) {
+    const closer = calId === MIKE_CALENDAR ? "Mike" : "Josh";
     const url = `${BASE}/calendars/events?locationId=${LOCATION_ID()}&calendarId=${calId}&startTime=${JAN1_2026}&endTime=${now}`;
     const res = await fetch(url, { headers: getHeaders() });
     if (!res.ok) continue;
     const data = await res.json();
+    const events = data.events || [];
 
-    for (const e of data.events || []) {
-      if (e.deleted) continue;
-      const startTime = new Date(e.startTime).getTime();
-      const endTime = new Date(e.endTime).getTime();
-      const title = (e.title || "").toLowerCase();
-      const status = e.appointmentStatus || "";
+    // Batch contact lookups for source
+    const batchSize = 10;
+    for (let i = 0; i < events.length; i += batchSize) {
+      const batch = events.slice(i, i + batchSize);
+      const sources = await Promise.all(
+        batch.map((e: { contactId?: string }) => getContactSource(e.contactId || ""))
+      );
+      batch.forEach((e: { deleted?: boolean; title?: string; appointmentStatus?: string; startTime: string; endTime: string }, idx: number) => {
+        if (e.deleted) return;
+        const titleLower = (e.title || "").toLowerCase();
+        const status = e.appointmentStatus || "";
+        const cancelled = status === "cancelled" || titleLower.startsWith("c-") || titleLower.includes("cancel");
+        const endTime = new Date(e.endTime).getTime();
 
-      const cancelled = status === "cancelled" || title.startsWith("c-") || title.includes("cancel");
-      const completed = !cancelled && endTime < now;
-
-      appts.push({
-        date: startTime,
-        calendarId: calId,
-        cancelled,
-        completed,
-        rescheduled: title.includes("reschedul"),
-        title: e.title || "",
+        appts.push({
+          date: new Date(e.startTime).getTime(),
+          calendarId: calId,
+          closer,
+          cancelled,
+          completed: !cancelled && endTime < now,
+          rescheduled: titleLower.includes("reschedul"),
+          source: sources[idx],
+          title: e.title || "",
+        });
       });
     }
   }
@@ -260,8 +289,9 @@ async function fetchAllAppointments2026(): Promise<ApptRecord[]> {
 }
 
 interface OppRecord {
-  date: number; // the date to bucket by
+  date: number;
   category: "offer_mike" | "offer_josh" | "ab_signed" | "bc_signed" | "settled";
+  closer: string; // "Mike" or "Josh"
   name: string;
   source: string;
   abPrice: number;
@@ -269,14 +299,14 @@ interface OppRecord {
   grossProfit: number;
 }
 
-async function fetchOppsByStage(pipelineId: string, stageId: string): Promise<{ id: string; name: string; source: string; lastStageChangeAt: string; createdAt: string }[]> {
-  const results: { id: string; name: string; source: string; lastStageChangeAt: string; createdAt: string }[] = [];
+async function fetchOppsByStage(pipelineId: string, stageId: string): Promise<{ id: string; name: string; source: string; contactId: string; lastStageChangeAt: string; createdAt: string }[]> {
+  const results: { id: string; name: string; source: string; contactId: string; lastStageChangeAt: string; createdAt: string }[] = [];
   const url = `${BASE}/opportunities/search?location_id=${LOCATION_ID()}&pipeline_id=${pipelineId}&pipeline_stage_id=${stageId}&limit=100`;
   const res = await fetch(url, { headers: getHeaders() });
   if (!res.ok) return results;
   const data = await res.json();
   for (const o of data.opportunities || []) {
-    results.push({ id: o.id, name: o.name || "", source: o.source || "", lastStageChangeAt: o.lastStageChangeAt, createdAt: o.createdAt });
+    results.push({ id: o.id, name: o.name || "", source: o.source || "", contactId: o.contactId || "", lastStageChangeAt: o.lastStageChangeAt, createdAt: o.createdAt });
   }
   return results;
 }
@@ -294,11 +324,13 @@ async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
 
   for (const o of mikeOffers) {
     const d = new Date(o.lastStageChangeAt).getTime();
-    if (d >= JAN1_2026) opps.push({ date: d, category: "offer_mike", name: o.name, source: o.source, abPrice: 0, bcPrice: 0, grossProfit: 0 });
+    const src = o.contactId ? await getContactSource(o.contactId) : o.source;
+    if (d >= JAN1_2026) opps.push({ date: d, category: "offer_mike", closer: "Mike", name: o.name, source: src, abPrice: 0, bcPrice: 0, grossProfit: 0 });
   }
   for (const o of joshOffers) {
     const d = new Date(o.lastStageChangeAt).getTime();
-    if (d >= JAN1_2026) opps.push({ date: d, category: "offer_josh", name: o.name, source: o.source, abPrice: 0, bcPrice: 0, grossProfit: 0 });
+    const src = o.contactId ? await getContactSource(o.contactId) : o.source;
+    if (d >= JAN1_2026) opps.push({ date: d, category: "offer_josh", closer: "Josh", name: o.name, source: src, abPrice: 0, bcPrice: 0, grossProfit: 0 });
   }
 
   // A-B signed: ALL TC pipeline opps, use createdAt as the date they entered TC
@@ -309,7 +341,11 @@ async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
     for (const o of tcData.opportunities || []) {
       const d = new Date(o.createdAt).getTime();
       if (d >= JAN1_2026) {
-        opps.push({ date: d, category: "ab_signed", name: o.name || "", source: o.source || "", abPrice: 0, bcPrice: 0, grossProfit: 0 });
+        const src = o.contactId ? await getContactSource(o.contactId) : (o.source || "");
+        // Determine closer from which pipeline the contact came through
+        const isMike = mikeOffers.some((m) => m.contactId === o.contactId);
+        const closer = isMike ? "Mike" : "Josh";
+        opps.push({ date: d, category: "ab_signed", closer, name: o.name || "", source: src, abPrice: 0, bcPrice: 0, grossProfit: 0 });
       }
     }
   }
@@ -317,13 +353,17 @@ async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
   // B-C signed: TC "B-C Assigned" stage, use lastStageChangeAt
   for (const o of bcAssigned) {
     const d = new Date(o.lastStageChangeAt).getTime();
-    if (d >= JAN1_2026) opps.push({ date: d, category: "bc_signed", name: o.name, source: o.source, abPrice: 0, bcPrice: 0, grossProfit: 0 });
+    const src = o.contactId ? await getContactSource(o.contactId) : o.source;
+    const isMike = mikeOffers.some((m) => m.contactId === o.contactId);
+    if (d >= JAN1_2026) opps.push({ date: d, category: "bc_signed", closer: isMike ? "Mike" : "Josh", name: o.name, source: src, abPrice: 0, bcPrice: 0, grossProfit: 0 });
   }
 
   // Settled: TC "Closed - Dispo Complete", fetch detail for pricing
   for (const o of closedDispo) {
     const d = new Date(o.lastStageChangeAt).getTime();
     if (d < JAN1_2026) continue;
+    const src = o.contactId ? await getContactSource(o.contactId) : o.source;
+    const isMike = mikeOffers.some((m) => m.contactId === o.contactId);
 
     let abPrice = 0, bcPrice = 0, grossProfit = 0;
     const detailRes = await fetch(`${BASE}/opportunities/${o.id}`, { headers: getHeaders() });
@@ -337,7 +377,7 @@ async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
         if (cf.id === OPP_FIELDS.grossProfit) grossProfit = val;
       }
     }
-    opps.push({ date: d, category: "settled", name: o.name, source: o.source, abPrice, bcPrice, grossProfit });
+    opps.push({ date: d, category: "settled", closer: isMike ? "Mike" : "Josh", name: o.name, source: src, abPrice, bcPrice, grossProfit });
   }
 
   return opps;
@@ -381,6 +421,17 @@ export interface WeekData {
   // Source breakdowns for drilldowns
   leadsBySource: SourceBreakdown;
   apptsBySource: SourceBreakdown;
+  abBySource: SourceBreakdown;
+  settledBySource: SourceBreakdown;
+  // Closer breakdown
+  mikeAppts: number;
+  mikeOffers: number;
+  mikeSigned: number;
+  mikeSettled: number;
+  joshAppts: number;
+  joshOffers: number;
+  joshSigned: number;
+  joshSettled: number;
 }
 
 export async function GET(request: Request) {
@@ -481,17 +532,28 @@ export async function GET(request: Request) {
         leadsBySource[src] = (leadsBySource[src] || 0) + 1;
       });
 
+      // Now using contact source for appointments
       const apptsBySource: SourceBreakdown = {};
       weekAppts.filter((a) => !a.cancelled).forEach((a) => {
-        // Extract source from appointment title (e.g. "*TV" suffix)
-        const t = a.title;
-        let src = "Other";
-        if (t.includes("*TV") || t.includes("*tv")) src = "TV";
-        else if (t.includes("*DM") || t.includes("Direct Mail")) src = "Direct Mail";
-        else if (t.includes("PPC") || t.includes("Google")) src = "Google Ads";
-        else if (t.includes("SEO")) src = "SEO";
+        const src = a.source || "Other";
         apptsBySource[src] = (apptsBySource[src] || 0) + 1;
       });
+
+      const abBySource: SourceBreakdown = {};
+      weekOpps.filter((o) => o.category === "ab_signed").forEach((o) => {
+        const src = o.source || "Other";
+        abBySource[src] = (abBySource[src] || 0) + 1;
+      });
+
+      const settledBySource: SourceBreakdown = {};
+      settledOpps.forEach((o) => {
+        const src = o.source || "Other";
+        settledBySource[src] = (settledBySource[src] || 0) + 1;
+      });
+
+      // Closer breakdown
+      const mikeAppts = weekAppts.filter((a) => a.closer === "Mike" && !a.cancelled).length;
+      const joshAppts = weekAppts.filter((a) => a.closer === "Josh" && !a.cancelled).length;
 
       return {
         startDate: w.start.toISOString().slice(0, 10),
@@ -505,7 +567,7 @@ export async function GET(request: Request) {
         connectRate: totalCallCount > 0 ? Math.round((connects / totalCallCount) * 10000) / 100 : 0,
         leads,
         prospects,
-        bookingPct: prospects > 0 ? Math.round((totalBooked / prospects) * 10000) / 100 : 0,
+        bookingPct: leads > 0 ? Math.round((totalBooked / leads) * 10000) / 100 : 0,
         inPersonBooked,
         virtualBooked,
         cancelledInPerson,
@@ -524,6 +586,16 @@ export async function GET(request: Request) {
         netProfit: 0,
         leadsBySource,
         apptsBySource,
+        abBySource,
+        settledBySource,
+        mikeAppts,
+        mikeOffers: weekOpps.filter((o) => o.category === "offer_mike").length,
+        mikeSigned: weekOpps.filter((o) => o.category === "ab_signed" && o.closer === "Mike").length,
+        mikeSettled: weekOpps.filter((o) => o.category === "settled" && o.closer === "Mike").length,
+        joshAppts,
+        joshOffers: weekOpps.filter((o) => o.category === "offer_josh").length,
+        joshSigned: weekOpps.filter((o) => o.category === "ab_signed" && o.closer === "Josh").length,
+        joshSettled: weekOpps.filter((o) => o.category === "settled" && o.closer === "Josh").length,
       };
     });
 

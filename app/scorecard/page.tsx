@@ -1,6 +1,12 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+  ResponsiveContainer, LineChart, Line,
+} from "recharts";
+
+interface SourceBreakdown { [source: string]: number; }
 
 interface WeekData {
   startDate: string;
@@ -31,130 +37,71 @@ interface WeekData {
   settled: number;
   grossProfit: number;
   netProfit: number;
-  leadsBySource: Record<string, number>;
-  apptsBySource: Record<string, number>;
+  leadsBySource: SourceBreakdown;
+  apptsBySource: SourceBreakdown;
+  abBySource: SourceBreakdown;
+  settledBySource: SourceBreakdown;
+  mikeAppts: number; mikeOffers: number; mikeSigned: number; mikeSettled: number;
+  joshAppts: number; joshOffers: number; joshSigned: number; joshSettled: number;
 }
 
 type ColFmt = (v: number | string) => string;
 
 function fmtDate(v: number | string) {
   const iso = String(v);
-  if (!iso || iso === "Total" || iso === "Avg/Week" || iso === "") return String(v);
+  if (!iso || iso.startsWith("Total") || iso.startsWith("Avg") || iso.startsWith("Q") || iso.startsWith("Jan") || iso.startsWith("Feb") || iso.startsWith("Mar") || iso === "") return String(v);
   const d = new Date(iso + "T00:00:00");
-  return d.toLocaleDateString("en-US", { month: "numeric", day: "numeric", year: "numeric" });
+  return d.toLocaleDateString("en-US", { month: "numeric", day: "numeric" });
 }
 
 function fmtPct(v: number | string) { const n = Number(v); return n ? `${n.toFixed(1)}%` : "0%"; }
 function fmtDur(v: number | string) { const s = Number(v); const m = Math.floor(s / 60), r = s % 60; return m ? `${m}m ${r}s` : `${r}s`; }
-function fmtMoney(v: number | string) { const n = Number(v); return n ? `$${n.toLocaleString()}` : "$0"; }
+function fmtMoney(v: number | string) { const n = Math.max(0, Number(v)); return n ? `$${n.toLocaleString()}` : "$0"; }
 
-interface Column {
-  key: string;
-  label: string;
-  fmt?: ColFmt;
-}
+interface Column { key: string; label: string; fmt?: ColFmt; }
 
 const COLUMN_GROUPS: { label: string; color: string; columns: Column[] }[] = [
-  {
-    label: "Date Range",
-    color: "bg-gray-700",
-    columns: [
-      { key: "startDate", label: "Start", fmt: fmtDate },
-      { key: "endDate", label: "End", fmt: fmtDate },
-    ],
-  },
-  {
-    label: "Calls",
-    color: "bg-blue-600",
-    columns: [
-      { key: "dials", label: "Dials" },
-      { key: "totalInbound", label: "Inbound" },
-      { key: "pickUpRate", label: "Pick Up %", fmt: fmtPct },
-      { key: "missedCalls", label: "Missed" },
-      { key: "connects", label: "Connects" },
-      { key: "avgCallDuration", label: "Avg Duration", fmt: fmtDur },
-      { key: "connectRate", label: "Connect %", fmt: fmtPct },
-    ],
-  },
-  {
-    label: "Leads",
-    color: "bg-emerald-600",
-    columns: [
-      { key: "leads", label: "Leads" },
-      { key: "prospects", label: "Prospects" },
-      { key: "bookingPct", label: "Booking %", fmt: fmtPct },
-    ],
-  },
-  {
-    label: "Appointments",
-    color: "bg-amber-600",
-    columns: [
-      { key: "inPersonBooked", label: "In-Person" },
-      { key: "virtualBooked", label: "Virtual" },
-      { key: "cancelledInPerson", label: "Canc. IP" },
-      { key: "cancelledVirtual", label: "Canc. V" },
-      { key: "rescheduled", label: "Resched." },
-      { key: "inPersonCompleted", label: "IP Done" },
-      { key: "virtualCompleted", label: "V Done" },
-      { key: "showRateInPerson", label: "Show % IP", fmt: fmtPct },
-      { key: "showRateVirtual", label: "Show % V", fmt: fmtPct },
-    ],
-  },
-  {
-    label: "Offers & Deals",
-    color: "bg-purple-600",
-    columns: [
-      { key: "inPersonOffers", label: "IP Offers" },
-      { key: "virtualOffers", label: "V Offers" },
-      { key: "abSigned", label: "A-B Signed" },
-      { key: "bcSigned", label: "B-C Signed" },
-      { key: "settled", label: "Settled" },
-      { key: "grossProfit", label: "Gross Profit", fmt: fmtMoney },
-      { key: "netProfit", label: "Net Profit", fmt: fmtMoney },
-    ],
-  },
+  { label: "Week", color: "bg-gray-700", columns: [
+    { key: "startDate", label: "Start", fmt: fmtDate },
+    { key: "endDate", label: "End", fmt: fmtDate },
+  ]},
+  { label: "Calls", color: "bg-blue-600", columns: [
+    { key: "dials", label: "Dials" },
+    { key: "totalInbound", label: "Inbound" },
+    { key: "pickUpRate", label: "Pick Up %", fmt: fmtPct },
+    { key: "missedCalls", label: "Missed" },
+    { key: "connects", label: "Connects" },
+    { key: "avgCallDuration", label: "Avg Dur", fmt: fmtDur },
+    { key: "connectRate", label: "Connect %", fmt: fmtPct },
+  ]},
+  { label: "Leads", color: "bg-emerald-600", columns: [
+    { key: "leads", label: "Leads" },
+    { key: "prospects", label: "Prospects" },
+    { key: "bookingPct", label: "Book %", fmt: fmtPct },
+  ]},
+  { label: "Appointments", color: "bg-amber-600", columns: [
+    { key: "inPersonBooked", label: "IP Book" },
+    { key: "virtualBooked", label: "V Book" },
+    { key: "cancelledInPerson", label: "Canc IP" },
+    { key: "cancelledVirtual", label: "Canc V" },
+    { key: "inPersonCompleted", label: "IP Done" },
+    { key: "virtualCompleted", label: "V Done" },
+    { key: "showRateInPerson", label: "Show% IP", fmt: fmtPct },
+    { key: "showRateVirtual", label: "Show% V", fmt: fmtPct },
+  ]},
+  { label: "Offers & Deals", color: "bg-purple-600", columns: [
+    { key: "inPersonOffers", label: "IP Offers" },
+    { key: "virtualOffers", label: "V Offers" },
+    { key: "abSigned", label: "A-B" },
+    { key: "bcSigned", label: "B-C" },
+    { key: "settled", label: "Settled" },
+    { key: "grossProfit", label: "Profit", fmt: fmtMoney },
+  ]},
 ];
 
 const allColumns = COLUMN_GROUPS.flatMap((g) => g.columns);
 
-function computeTotals(weeks: WeekData[]): Record<string, number | string> {
-  const totals: Record<string, number | string> = { startDate: "Total", endDate: "" };
-  for (const col of allColumns) {
-    if (col.key === "startDate" || col.key === "endDate") continue;
-    if (col.key.includes("Rate") || col.key.includes("Pct") || col.key === "pickUpRate" || col.key === "bookingPct") {
-      // Average the percentages
-      const vals = weeks.map((w) => (w as unknown as Record<string, number>)[col.key]).filter((v) => v > 0);
-      totals[col.key] = vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
-    } else if (col.key === "avgCallDuration") {
-      const vals = weeks.map((w) => w.avgCallDuration).filter((v) => v > 0);
-      totals[col.key] = vals.length > 0 ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : 0;
-    } else {
-      totals[col.key] = weeks.reduce((a, w) => a + ((w as unknown as Record<string, number>)[col.key] || 0), 0);
-    }
-  }
-  return totals;
-}
-
-function computeAverages(weeks: WeekData[]): Record<string, number | string> {
-  const avgs: Record<string, number | string> = { startDate: "Avg/Week", endDate: "" };
-  const n = weeks.length || 1;
-  for (const col of allColumns) {
-    if (col.key === "startDate" || col.key === "endDate") continue;
-    if (col.key.includes("Rate") || col.key.includes("Pct") || col.key === "pickUpRate" || col.key === "bookingPct") {
-      const vals = weeks.map((w) => (w as unknown as Record<string, number>)[col.key]).filter((v) => v > 0);
-      avgs[col.key] = vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
-    } else if (col.key === "avgCallDuration") {
-      const vals = weeks.map((w) => w.avgCallDuration).filter((v) => v > 0);
-      avgs[col.key] = vals.length > 0 ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : 0;
-    } else {
-      avgs[col.key] = Math.round(weeks.reduce((a, w) => a + ((w as unknown as Record<string, number>)[col.key] || 0), 0) / n * 100) / 100;
-    }
-  }
-  return avgs;
-}
-
-const RefreshIcon = () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>;
-
+// Drilldown modal
 function DrilldownModal({ title, data, onClose }: { title: string; data: Record<string, number>; onClose: () => void }) {
   const entries = Object.entries(data).sort((a, b) => b[1] - a[1]);
   const total = entries.reduce((a, [, v]) => a + v, 0);
@@ -183,6 +130,36 @@ function DrilldownModal({ title, data, onClose }: { title: string; data: Record<
   );
 }
 
+function sumField(weeks: WeekData[], key: string): number {
+  return weeks.reduce((a, w) => a + ((w as unknown as Record<string, number>)[key] || 0), 0);
+}
+
+function avgField(weeks: WeekData[], key: string): number {
+  const n = weeks.length || 1;
+  return Math.round(sumField(weeks, key) / n * 100) / 100;
+}
+
+function buildSummaryRow(label: string, subset: WeekData[]): Record<string, number | string> {
+  const row: Record<string, number | string> = { startDate: label, endDate: "" };
+  for (const col of allColumns) {
+    if (col.key === "startDate" || col.key === "endDate") continue;
+    if (col.key.includes("Rate") || col.key.includes("Pct") || col.key === "pickUpRate" || col.key === "bookingPct") {
+      const vals = subset.map((w) => (w as unknown as Record<string, number>)[col.key]).filter((v) => v > 0);
+      row[col.key] = vals.length > 0 ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length * 100) / 100 : 0;
+    } else if (col.key === "avgCallDuration") {
+      const vals = subset.map((w) => w.avgCallDuration).filter((v) => v > 0);
+      row[col.key] = vals.length > 0 ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : 0;
+    } else {
+      row[col.key] = sumField(subset, col.key);
+    }
+  }
+  return row;
+}
+
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+const RefreshIcon = () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>;
+
 export default function ScorecardPage() {
   const [weeks, setWeeks] = useState<WeekData[]>([]);
   const [drilldown, setDrilldown] = useState<{ title: string; data: Record<string, number> } | null>(null);
@@ -194,19 +171,61 @@ export default function ScorecardPage() {
     fetch("/api/scorecard")
       .then((r) => r.json())
       .then((data) => {
-        if (data.error) {
-          setError(data.error);
-        } else {
-          setWeeks(data.weeks || []);
-          setLastUpdated(data.lastUpdated || "");
-        }
+        if (data.error) setError(data.error);
+        else { setWeeks(data.weeks || []); setLastUpdated(data.lastUpdated || ""); }
       })
       .catch(() => setError("Failed to load scorecard"))
       .finally(() => setLoading(false));
   }, []);
 
-  const totals = useMemo(() => computeTotals(weeks), [weeks]);
-  const averages = useMemo(() => computeAverages(weeks), [weeks]);
+  // Monthly/Quarterly summaries
+  const monthlySummaries = useMemo(() => {
+    const byMonth: Record<number, WeekData[]> = {};
+    weeks.forEach((w) => { const m = new Date(w.startDate + "T00:00:00").getMonth(); if (!byMonth[m]) byMonth[m] = []; byMonth[m].push(w); });
+    return Object.entries(byMonth).map(([m, ws]) => ({ label: MONTHS[parseInt(m)], ...buildSummaryRow(MONTHS[parseInt(m)], ws) }));
+  }, [weeks]);
+
+  const q1Summary = useMemo(() => {
+    const q1 = weeks.filter((w) => { const m = new Date(w.startDate + "T00:00:00").getMonth(); return m < 3; });
+    return buildSummaryRow("Q1 2026", q1);
+  }, [weeks]);
+
+  const ytdSummary = useMemo(() => buildSummaryRow("YTD 2026", weeks), [weeks]);
+  const ytdAvg = useMemo(() => {
+    const row = buildSummaryRow("Avg/Week", weeks);
+    for (const col of allColumns) {
+      if (col.key === "startDate" || col.key === "endDate") continue;
+      if (!col.key.includes("Rate") && !col.key.includes("Pct") && col.key !== "pickUpRate" && col.key !== "bookingPct" && col.key !== "avgCallDuration") {
+        row[col.key] = avgField(weeks, col.key);
+      }
+    }
+    return row;
+  }, [weeks]);
+
+  // Mike vs Josh leaderboard
+  const leaderboard = useMemo(() => ({
+    mike: { appts: sumField(weeks, "mikeAppts"), offers: sumField(weeks, "mikeOffers"), signed: sumField(weeks, "mikeSigned"), settled: sumField(weeks, "mikeSettled") },
+    josh: { appts: sumField(weeks, "joshAppts"), offers: sumField(weeks, "joshOffers"), signed: sumField(weeks, "joshSigned"), settled: sumField(weeks, "joshSettled") },
+  }), [weeks]);
+
+  // Chart data
+  const chartData = useMemo(() => weeks.map((w) => ({
+    week: fmtDate(w.startDate),
+    Leads: w.leads,
+    Connects: w.connects,
+    "IP Appts": w.inPersonCompleted,
+    "V Appts": w.virtualCompleted,
+    "A-B": w.abSigned,
+    Settled: w.settled,
+  })), [weeks]);
+
+  const rateChartData = useMemo(() => weeks.map((w) => ({
+    week: fmtDate(w.startDate),
+    "Connect %": w.connectRate,
+    "Book %": w.bookingPct,
+    "Show % IP": w.showRateInPerson,
+    "Show % V": w.showRateVirtual,
+  })), [weeks]);
 
   if (loading) {
     return (
@@ -214,7 +233,6 @@ export default function ScorecardPage() {
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto"></div>
           <p className="mt-4 text-gray-500 font-medium">Building scorecard from GHL data...</p>
-          <p className="mt-2 text-gray-400 text-sm">This may take a minute on first load</p>
         </div>
       </div>
     );
@@ -223,24 +241,41 @@ export default function ScorecardPage() {
   function renderCell(row: Record<string, number | string>, col: Column, isSummary = false, weekIdx?: number) {
     const val = row[col.key];
     if (col.key === "startDate" || col.key === "endDate") {
-      if (isSummary) return <span className="font-bold text-gray-900">{val}</span>;
-      return <span className="text-gray-700">{col.fmt ? col.fmt(val) : val}</span>;
+      return <span className={isSummary ? "font-bold text-gray-900" : "text-gray-700"}>{col.fmt ? col.fmt(val) : val}</span>;
     }
     const display = col.fmt ? col.fmt(val) : Number(val).toLocaleString();
     const num = Number(val);
 
-    // Make leads and appointments clickable for source drilldown
+    // Clickable drilldowns
     if (!isSummary && weekIdx !== undefined && num > 0) {
       const week = weeks[weekIdx];
       if (col.key === "leads" && week?.leadsBySource) {
-        return <button onClick={() => setDrilldown({ title: `Leads - Week of ${fmtDate(week.startDate)}`, data: week.leadsBySource })} className="text-blue-600 hover:text-blue-800 underline cursor-pointer font-medium">{display}</button>;
+        return <button onClick={() => setDrilldown({ title: `Leads - ${fmtDate(week.startDate)}`, data: week.leadsBySource })} className="text-blue-600 hover:text-blue-800 underline font-medium">{display}</button>;
       }
-      if ((col.key === "inPersonBooked" || col.key === "virtualBooked") && week?.apptsBySource) {
-        return <button onClick={() => setDrilldown({ title: `Appointments - Week of ${fmtDate(week.startDate)}`, data: week.apptsBySource })} className="text-blue-600 hover:text-blue-800 underline cursor-pointer font-medium">{display}</button>;
+      if ((col.key === "inPersonBooked" || col.key === "virtualBooked" || col.key === "inPersonCompleted" || col.key === "virtualCompleted") && week?.apptsBySource) {
+        return <button onClick={() => setDrilldown({ title: `Appointments - ${fmtDate(week.startDate)}`, data: week.apptsBySource })} className="text-blue-600 hover:text-blue-800 underline font-medium">{display}</button>;
+      }
+      if (col.key === "abSigned" && week?.abBySource) {
+        return <button onClick={() => setDrilldown({ title: `A-B Signed - ${fmtDate(week.startDate)}`, data: week.abBySource })} className="text-blue-600 hover:text-blue-800 underline font-medium">{display}</button>;
+      }
+      if (col.key === "settled" && week?.settledBySource) {
+        return <button onClick={() => setDrilldown({ title: `Settled - ${fmtDate(week.startDate)}`, data: week.settledBySource })} className="text-blue-600 hover:text-blue-800 underline font-medium">{display}</button>;
       }
     }
 
     return <span className={isSummary ? "font-bold" : ""}>{display}</span>;
+  }
+
+  function SummaryRow({ row, className }: { row: Record<string, number | string>; className: string }) {
+    return (
+      <tr className={className}>
+        {allColumns.map((col) => (
+          <td key={col.key} className="px-3 py-2 whitespace-nowrap text-center border-r border-inherit font-bold">
+            {renderCell(row, col, true)}
+          </td>
+        ))}
+      </tr>
+    );
   }
 
   return (
@@ -278,24 +313,24 @@ export default function ScorecardPage() {
           <div>
             <h2 className="text-lg font-bold text-gray-900">2026 Operations Scorecard</h2>
             <p className="text-sm text-gray-500">
-              Weekly KPIs auto-pulled from GHL &middot; {weeks.length} weeks
+              Weekly KPIs &middot; {weeks.length} weeks &middot; Click numbers for source breakdown
               {lastUpdated && <span className="ml-2 text-xs text-gray-400">Updated {new Date(lastUpdated).toLocaleTimeString()}</span>}
             </p>
           </div>
           <div className="flex items-center gap-3">
             {error && <span className="text-red-500 text-xs">{error}</span>}
             <button onClick={() => { setLoading(true); setError(""); fetch("/api/scorecard?refresh=true").then(r => r.json()).then(d => { setWeeks(d.weeks || []); setLastUpdated(d.lastUpdated || ""); }).catch(() => setError("Failed")).finally(() => setLoading(false)); }}
-              className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-500 hover:text-gray-700 transition" title="Refresh">
+              className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-500 hover:text-gray-700 transition" title="Force Refresh">
               <RefreshIcon />
             </button>
           </div>
         </header>
 
-        <div className="p-6">
+        <div className="p-6 space-y-6">
+          {/* Weekly Table */}
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
             <div className="overflow-x-auto">
               <table className="text-xs border-collapse w-full">
-                {/* Column group headers */}
                 <thead>
                   <tr>
                     {COLUMN_GROUPS.map((g) => (
@@ -314,7 +349,6 @@ export default function ScorecardPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {/* Weekly rows */}
                   {weeks.map((week, i) => (
                     <tr key={i} className="hover:bg-blue-50/30 transition border-b border-gray-50">
                       {allColumns.map((col) => (
@@ -325,29 +359,84 @@ export default function ScorecardPage() {
                     </tr>
                   ))}
 
-                  {/* Totals row */}
-                  {weeks.length > 0 && (
-                    <tr className="bg-emerald-50 border-t-2 border-emerald-300">
-                      {allColumns.map((col) => (
-                        <td key={col.key} className="px-3 py-2 whitespace-nowrap text-center border-r border-emerald-100 font-bold text-emerald-900">
-                          {renderCell(totals, col, true)}
-                        </td>
-                      ))}
-                    </tr>
-                  )}
+                  {/* Monthly summaries */}
+                  {monthlySummaries.map((ms) => (
+                    <SummaryRow key={ms.label} row={ms} className="bg-amber-50 border-t-2 border-amber-300 text-amber-900" />
+                  ))}
 
-                  {/* Averages row */}
-                  {weeks.length > 0 && (
-                    <tr className="bg-blue-50 border-t border-blue-200">
-                      {allColumns.map((col) => (
-                        <td key={col.key} className="px-3 py-2 whitespace-nowrap text-center border-r border-blue-100 font-bold text-blue-900">
-                          {renderCell(averages, col, true)}
-                        </td>
-                      ))}
-                    </tr>
-                  )}
+                  {/* Q1 */}
+                  <SummaryRow row={q1Summary} className="bg-indigo-50 border-t-2 border-indigo-300 text-indigo-900" />
+
+                  {/* YTD */}
+                  <SummaryRow row={ytdSummary} className="bg-emerald-50 border-t-2 border-emerald-300 text-emerald-900" />
+                  <SummaryRow row={ytdAvg} className="bg-blue-50 border-t border-blue-200 text-blue-900" />
                 </tbody>
               </table>
+            </div>
+          </div>
+
+          {/* Mike vs Josh Leaderboard */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+            <h3 className="text-sm font-semibold text-gray-700 mb-4">Sales Leaderboard - Mike (In-Person) vs Josh (Virtual)</h3>
+            <div className="grid grid-cols-2 gap-6">
+              {[
+                { name: "Mike", data: leaderboard.mike, color: "blue" },
+                { name: "Josh", data: leaderboard.josh, color: "purple" },
+              ].map(({ name, data, color }) => (
+                <div key={name} className={`border rounded-lg p-4 ${color === "blue" ? "border-blue-200 bg-blue-50/50" : "border-purple-200 bg-purple-50/50"}`}>
+                  <h4 className={`font-bold text-lg ${color === "blue" ? "text-blue-900" : "text-purple-900"}`}>{name}</h4>
+                  <div className="grid grid-cols-4 gap-3 mt-3">
+                    {[
+                      { label: "Appts", val: data.appts },
+                      { label: "Offers", val: data.offers },
+                      { label: "Signed", val: data.signed },
+                      { label: "Settled", val: data.settled },
+                    ].map((m) => (
+                      <div key={m.label} className="text-center">
+                        <p className="text-2xl font-bold text-gray-900">{m.val}</p>
+                        <p className="text-xs text-gray-500">{m.label}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Trend Charts */}
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+              <h3 className="text-sm font-semibold text-gray-700 mb-4">Weekly Volume Trends</h3>
+              <ResponsiveContainer width="100%" height={280}>
+                <BarChart data={chartData} barGap={2}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="week" tick={{ fontSize: 10 }} />
+                  <YAxis tick={{ fontSize: 10 }} allowDecimals={false} />
+                  <Tooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <Bar dataKey="Leads" fill="#10b981" radius={[2, 2, 0, 0]} />
+                  <Bar dataKey="Connects" fill="#3b82f6" radius={[2, 2, 0, 0]} />
+                  <Bar dataKey="IP Appts" fill="#f59e0b" radius={[2, 2, 0, 0]} />
+                  <Bar dataKey="V Appts" fill="#8b5cf6" radius={[2, 2, 0, 0]} />
+                  <Bar dataKey="A-B" fill="#ef4444" radius={[2, 2, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+              <h3 className="text-sm font-semibold text-gray-700 mb-4">Conversion Rate Trends</h3>
+              <ResponsiveContainer width="100%" height={280}>
+                <LineChart data={rateChartData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="week" tick={{ fontSize: 10 }} />
+                  <YAxis tick={{ fontSize: 10 }} unit="%" />
+                  <Tooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} formatter={(v: unknown) => `${Number(v).toFixed(1)}%`} />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <Line type="monotone" dataKey="Connect %" stroke="#3b82f6" strokeWidth={2} dot={{ r: 3 }} />
+                  <Line type="monotone" dataKey="Book %" stroke="#10b981" strokeWidth={2} dot={{ r: 3 }} />
+                  <Line type="monotone" dataKey="Show% IP" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3 }} />
+                  <Line type="monotone" dataKey="Show% V" stroke="#8b5cf6" strokeWidth={2} dot={{ r: 3 }} />
+                </LineChart>
+              </ResponsiveContainer>
             </div>
           </div>
         </div>
