@@ -154,11 +154,11 @@ export async function GET(request: Request) {
   const mode = searchParams.get("mode") || "full"; // "full" or "recent"
 
   try {
-    if (!process.env.GHL_API_TOKEN || !process.env.GHL_process.env.GHL_LOCATION_ID) {
+    if (!process.env.GHL_API_TOKEN || !process.env.GHL_LOCATION_ID) {
       return NextResponse.json({
         error: "Missing env vars",
         hasToken: !!process.env.GHL_API_TOKEN,
-        hasLocation: !!process.env.GHL_process.env.GHL_LOCATION_ID,
+        hasLocation: !!process.env.GHL_LOCATION_ID,
       }, { status: 500 });
     }
 
