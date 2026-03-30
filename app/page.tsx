@@ -168,14 +168,24 @@ export default function Dashboard() {
     return counts;
   }, [calls]);
 
-  const filtered = useMemo(() => calls.filter((c) => {
-    const d = new Date(c.date);
-    const diff = (now.getTime() - d.getTime()) / (1000 * 60 * 60 * 24);
-    if (dateRange === "today" && diff > 1) return false;
-    if (dateRange === "yesterday" && (diff < 1 || diff > 2)) return false;
-    if (dateRange === "week" && diff > 7) return false;
-    if (dateRange === "month" && diff > 31) return false;
-    if (dateRange === "quarter" && diff > 93) return false;
+  const filtered = useMemo(() => {
+    // Use calendar-based dates instead of rolling hours
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const yesterdayStart = todayStart - 86400000;
+    const weekStart = todayStart - (now.getDay() === 0 ? 6 : now.getDay() - 1) * 86400000; // Monday
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+    const quarterMonth = Math.floor(now.getMonth() / 3) * 3;
+    const quarterStart = new Date(now.getFullYear(), quarterMonth, 1).getTime();
+    const yearStart = new Date(now.getFullYear(), 0, 1).getTime();
+
+    return calls.filter((c) => {
+    const t = new Date(c.date).getTime();
+    if (dateRange === "today" && t < todayStart) return false;
+    if (dateRange === "yesterday" && (t < yesterdayStart || t >= todayStart)) return false;
+    if (dateRange === "week" && t < weekStart) return false;
+    if (dateRange === "month" && t < monthStart) return false;
+    if (dateRange === "quarter" && t < quarterStart) return false;
+    if (dateRange === "year" && t < yearStart) return false;
     if (numberFilter && c.numberName !== numberFilter) return false;
     if (connFilter === "connected" && !c.connected) return false;
     if (connFilter === "missed" && c.connected) return false;
@@ -187,7 +197,8 @@ export default function Dashboard() {
       if (!cleanName(c.contactName).toLowerCase().includes(s) && !c.callerPhone.includes(s) && !c.address.toLowerCase().includes(s)) return false;
     }
     return true;
-    }), [calls, dateRange, numberFilter, connFilter, dirFilter, firstTimeOnly, phoneCounts, search, now]);
+    });
+  }, [calls, dateRange, numberFilter, connFilter, dirFilter, firstTimeOnly, phoneCounts, search, now]);
 
   const numberNames = useMemo(() => Array.from(new Set(calls.map((c) => c.numberName))).sort(), [calls]);
 
@@ -201,8 +212,10 @@ export default function Dashboard() {
     const uq = new Set(filtered.map((c) => c.callerPhone)).size;
     const inbound = filtered.filter((c) => c.direction === "inbound").length;
     const outbound = filtered.filter((c) => c.direction === "outbound").length;
-    const todayCalls = filtered.filter((c) => (now.getTime() - new Date(c.date).getTime()) / (1000 * 60 * 60 * 24) < 1).length;
-    const weekCalls = filtered.filter((c) => (now.getTime() - new Date(c.date).getTime()) / (1000 * 60 * 60 * 24) < 7).length;
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const weekStart = todayStart - (now.getDay() === 0 ? 6 : now.getDay() - 1) * 86400000;
+    const todayCalls = filtered.filter((c) => new Date(c.date).getTime() >= todayStart).length;
+    const weekCalls = filtered.filter((c) => new Date(c.date).getTime() >= weekStart).length;
     return { total: t, conn: cn, rate, avgDur: avg, leads, unique: uq, inbound, outbound, todayCalls, weekCalls };
   }, [filtered, now]);
 
