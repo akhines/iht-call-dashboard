@@ -6,6 +6,10 @@ import {
   ResponsiveContainer, PieChart, Pie, Cell,
 } from "recharts";
 
+// Client-side cache to prevent re-fetch on every tab switch
+let cachedWeeks: WeekData[] | null = null;
+let cachedLastUpdated = "";
+
 interface SourceBreakdown { [source: string]: number; }
 
 interface WeekData {
@@ -161,18 +165,26 @@ const MONTHS = ["January", "February", "March", "April", "May", "June", "July", 
 const RefreshIcon = () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>;
 
 export default function ScorecardPage() {
-  const [weeks, setWeeks] = useState<WeekData[]>([]);
+  const [weeks, setWeeks] = useState<WeekData[]>(cachedWeeks || []);
   const [drilldown, setDrilldown] = useState<{ title: string; data: Record<string, number> } | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!cachedWeeks);
   const [error, setError] = useState("");
-  const [lastUpdated, setLastUpdated] = useState("");
+  const [lastUpdated, setLastUpdated] = useState(cachedLastUpdated);
 
   useEffect(() => {
+    if (cachedWeeks) return; // Already have data, skip fetch
     fetch("/api/scorecard")
       .then((r) => r.json())
       .then((data) => {
         if (data.error) setError(data.error);
-        else { setWeeks(data.weeks || []); setLastUpdated(data.lastUpdated || ""); }
+        else {
+          const w = data.weeks || [];
+          const u = data.lastUpdated || "";
+          cachedWeeks = w;
+          cachedLastUpdated = u;
+          setWeeks(w);
+          setLastUpdated(u);
+        }
       })
       .catch(() => setError("Failed to load scorecard"))
       .finally(() => setLoading(false));
@@ -332,7 +344,7 @@ export default function ScorecardPage() {
           </div>
           <div className="flex items-center gap-3">
             {error && <span className="text-red-500 text-xs">{error}</span>}
-            <button onClick={() => { setLoading(true); setError(""); fetch("/api/scorecard?refresh=true").then(r => r.json()).then(d => { setWeeks(d.weeks || []); setLastUpdated(d.lastUpdated || ""); }).catch(() => setError("Failed")).finally(() => setLoading(false)); }}
+            <button onClick={() => { setLoading(true); setError(""); fetch("/api/scorecard?refresh=true").then(r => r.json()).then(d => { const w = d.weeks || []; const u = d.lastUpdated || ""; cachedWeeks = w; cachedLastUpdated = u; setWeeks(w); setLastUpdated(u); }).catch(() => setError("Failed")).finally(() => setLoading(false)); }}
               className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-500 hover:text-gray-700 transition" title="Force Refresh">
               <RefreshIcon />
             </button>

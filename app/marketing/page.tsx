@@ -57,12 +57,17 @@ function fmtMoney(v: number) { const n = Math.max(0, v); return n ? `$${n.toLoca
 
 const RefreshIcon = () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>;
 
+// Client-side cache
+let mktCachedWeeks: MarketingWeekData[] | null = null;
+let mktCachedChannels: string[] | null = null;
+let mktCachedLastUpdated = "";
+
 export default function MarketingPage() {
-  const [weeks, setWeeks] = useState<MarketingWeekData[]>([]);
-  const [channels, setChannels] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [weeks, setWeeks] = useState<MarketingWeekData[]>(mktCachedWeeks || []);
+  const [channels, setChannels] = useState<string[]>(mktCachedChannels || []);
+  const [loading, setLoading] = useState(!mktCachedWeeks);
   const [error, setError] = useState("");
-  const [lastUpdated, setLastUpdated] = useState("");
+  const [lastUpdated, setLastUpdated] = useState(mktCachedLastUpdated);
   const [editingCell, setEditingCell] = useState<{ weekKey: string; channel: string; metric: string } | null>(null);
   const [editValue, setEditValue] = useState("");
   const [saving, setSaving] = useState(false);
@@ -74,16 +79,22 @@ export default function MarketingPage() {
       .then((data) => {
         if (data.error) setError(data.error);
         else {
-          setWeeks(data.weeks || []);
-          setChannels(data.channels || []);
-          setLastUpdated(data.lastUpdated || "");
+          const w = data.weeks || [];
+          const c = data.channels || [];
+          const u = data.lastUpdated || "";
+          mktCachedWeeks = w;
+          mktCachedChannels = c;
+          mktCachedLastUpdated = u;
+          setWeeks(w);
+          setChannels(c);
+          setLastUpdated(u);
         }
       })
       .catch(() => setError("Failed to load"))
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetchData(); }, []);
+  useEffect(() => { if (!mktCachedWeeks) fetchData(); }, []);
 
   async function saveManualInput(weekKey: string, channel: string, metric: string, value: number) {
     setSaving(true);
