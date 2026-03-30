@@ -129,7 +129,19 @@ export default function Dashboard() {
       const res = await fetch(`/api/calls?mode=${mode}`);
       if (!res.ok) throw new Error("API error");
       const data = await res.json();
-      setCalls(data.calls);
+      if (mode === "recent") {
+        // Merge new calls into existing dataset without losing older data
+        setCalls((prev) => {
+          const existingIds = new Set(prev.map((c) => c.id));
+          const newCalls = (data.calls || []).filter((c: CallRecord) => !existingIds.has(c.id));
+          if (newCalls.length === 0) return prev;
+          return [...newCalls, ...prev].sort(
+            (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+          );
+        });
+      } else {
+        setCalls(data.calls);
+      }
       setLastUpdated(data.lastUpdated);
       setError("");
     } catch {
