@@ -472,7 +472,7 @@ export async function GET(request: Request) {
       const bcSigned = weekOpps.filter((o) => o.category === "bc_signed").length;
       const settledOpps = weekOpps.filter((o) => o.category === "settled");
       const settled = settledOpps.length;
-      const grossProfit = settledOpps.reduce((a, o) => a + (o.grossProfit || (o.bcPrice - o.abPrice)), 0);
+      const grossProfit = settledOpps.reduce((a, o) => a + (o.grossProfit || (o.bcPrice && o.abPrice ? Math.max(0, o.bcPrice - o.abPrice) : 0)), 0);
 
       // Source breakdowns
       const leadsBySource: SourceBreakdown = {};

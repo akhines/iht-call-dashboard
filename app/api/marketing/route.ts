@@ -345,7 +345,7 @@ export async function GET(request: Request) {
           ab: weekAb.length,
           closings: weekClosings.length,
           settled: weekSettled.length,
-          grossProfit: weekSettled.reduce((a, d) => a + (d.grossProfit || (d.bcPrice - d.abPrice)), 0),
+          grossProfit: weekSettled.reduce((a, d) => a + (d.grossProfit || (d.bcPrice && d.abPrice ? Math.max(0, d.bcPrice - d.abPrice) : 0)), 0),
           spend: manual.spend || 0,
           mailersSent: manual.mailersSent || 0,
         };
