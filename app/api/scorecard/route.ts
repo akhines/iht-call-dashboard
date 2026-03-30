@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { kv } from "@vercel/kv";
+import { fetchAllCalls2026 } from "@/app/lib/ghl-calls";
 
 export const dynamic = "force-dynamic";
 
@@ -94,97 +95,7 @@ function findWeekKey(date: Date, weeks: Week[]): string | null {
 
 // ============ DATA FETCHERS (fetch ALL, then bucket) ============
 
-interface CallRecord {
-  date: number;
-  direction: string;
-  duration: number;
-  connected: boolean;
-}
-
-async function fetchAllCalls2026(): Promise<CallRecord[]> {
-  // Reuse the calls API endpoint which already handles full pagination
-  const baseUrl = process.env.VERCEL_URL
-    ? `https://${process.env.VERCEL_URL}`
-    : "http://localhost:3000";
-
-  try {
-    const res = await fetch(`${baseUrl}/api/calls?mode=full`, { headers: { Accept: "application/json" } });
-    if (!res.ok) throw new Error("Calls API failed");
-    const data = await res.json();
-    return (data.calls || []).map((c: { date: string; direction: string; durationSecs: number; connected: boolean }) => ({
-      date: new Date(c.date).getTime(),
-      direction: c.direction,
-      duration: c.durationSecs,
-      connected: c.connected,
-    }));
-  } catch {
-    console.error("Scorecard: failed to fetch calls from /api/calls, falling back to direct GHL fetch");
-    // Fallback: direct GHL fetch with proper pagination
-    const allCalls: CallRecord[] = [];
-    const allConvIds: string[] = [];
-
-    // First collect ALL conversation IDs
-    let startAfterDate: number | null = null;
-    for (let page = 0; page < 20; page++) {
-      let url = `${BASE}/conversations/search?locationId=${LOCATION_ID()}&limit=100&lastMessageType=TYPE_CALL&sort_by=last_message_date&sort_order=desc`;
-      if (startAfterDate) url += `&startAfterDate=${startAfterDate}`;
-
-      const res = await fetch(url, { headers: getHeaders() });
-      if (!res.ok) break;
-      const data = await res.json();
-      const convs = data.conversations || [];
-      if (convs.length === 0) break;
-
-      for (const c of convs) {
-        if (c.lastMessageDate >= JAN1_2026) allConvIds.push(c.id);
-      }
-
-      const lastDate = convs[convs.length - 1].lastMessageDate;
-      if (lastDate < JAN1_2026) break;
-      startAfterDate = lastDate;
-      if (convs.length < 100) break;
-    }
-
-    console.log(`Scorecard: fetching messages for ${allConvIds.length} conversations`);
-
-    // Now fetch messages for ALL conversations
-    const batchSize = 10;
-    for (let i = 0; i < allConvIds.length; i += batchSize) {
-      const batch = allConvIds.slice(i, i + batchSize);
-      const results = await Promise.all(
-        batch.map(async (convId: string) => {
-          const msgRes = await fetch(`${BASE}/conversations/${convId}/messages`, { headers: getHeaders() });
-          if (!msgRes.ok) return [];
-          const msgData = await msgRes.json();
-          let msgs = msgData.messages || [];
-          if (msgs && typeof msgs === "object" && !Array.isArray(msgs)) msgs = msgs.messages || [];
-          return msgs;
-        })
-      );
-
-      for (const msgs of results) {
-        for (const msg of msgs) {
-          const mt = msg.messageType || "";
-          if (!mt.includes("CALL")) continue;
-          const msgDate = new Date(msg.dateAdded).getTime();
-          if (msgDate < JAN1_2026) continue;
-
-          const isInbound = msg.direction === "inbound" || mt === "TYPE_IVR_CALL";
-          const duration = msg.meta?.call?.duration || 0;
-          const status = msg.meta?.call?.status || msg.status || "";
-
-          allCalls.push({
-            date: msgDate,
-            direction: isInbound ? "inbound" : "outbound",
-            duration,
-            connected: status === "completed" && duration >= 20,
-          });
-        }
-      }
-    }
-    return allCalls;
-  }
-}
+// CallRecord type imported from shared module as SimpleCallRecord
 
 interface SellerContact {
   dateAdded: number;
