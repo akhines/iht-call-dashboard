@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server";
 
-const GHL_TOKEN = process.env.GHL_API_TOKEN!;
-const LOCATION_ID = process.env.GHL_LOCATION_ID!;
 const BASE = "https://services.leadconnectorhq.com";
-const HEADERS = {
-  Authorization: `Bearer ${GHL_TOKEN}`,
-  Version: "2021-07-28",
-  Accept: "application/json",
-};
+
+function getHeaders() {
+  return {
+    Authorization: `Bearer ${process.env.GHL_API_TOKEN}`,
+    Version: "2021-07-28",
+    Accept: "application/json",
+  };
+}
 
 // Tracking number display names
 const NUMBER_NAMES: Record<string, string> = {
@@ -71,13 +72,16 @@ async function fetchAllCallConversations(): Promise<GHLConversation[]> {
 
   // Paginate through all TYPE_CALL conversations
   for (let page = 0; page < 20; page++) {
-    let url = `${BASE}/conversations/search?locationId=${LOCATION_ID}&limit=100&lastMessageType=TYPE_CALL&sort_by=last_message_date&sort_order=desc`;
+    let url = `${BASE}/conversations/search?locationId=${process.env.GHL_LOCATION_ID}&limit=100&lastMessageType=TYPE_CALL&sort_by=last_message_date&sort_order=desc`;
     if (startAfterDate) {
       url += `&startAfterDate=${startAfterDate}`;
     }
 
-    const res = await fetch(url, { headers: HEADERS });
-    if (!res.ok) break;
+    const res = await fetch(url, { headers: getHeaders() });
+    if (!res.ok) {
+      console.error("GHL conversations search failed:", res.status, await res.text().catch(() => ""));
+      break;
+    }
 
     const data = await res.json();
     const convs: GHLConversation[] = data.conversations || [];
@@ -106,9 +110,12 @@ async function fetchAllCallConversations(): Promise<GHLConversation[]> {
 
 async function fetchCallMessages(conversationId: string): Promise<GHLMessage[]> {
   const res = await fetch(`${BASE}/conversations/${conversationId}/messages`, {
-    headers: HEADERS,
+    headers: getHeaders(),
   });
-  if (!res.ok) return [];
+  if (!res.ok) {
+    console.error("GHL messages fetch failed:", conversationId, res.status);
+    return [];
+  }
 
   const data = await res.json();
   let msgs = data.messages || [];
@@ -147,6 +154,14 @@ export async function GET(request: Request) {
   const mode = searchParams.get("mode") || "full"; // "full" or "recent"
 
   try {
+    if (!process.env.GHL_API_TOKEN || !process.env.GHL_process.env.GHL_LOCATION_ID) {
+      return NextResponse.json({
+        error: "Missing env vars",
+        hasToken: !!process.env.GHL_API_TOKEN,
+        hasLocation: !!process.env.GHL_process.env.GHL_LOCATION_ID,
+      }, { status: 500 });
+    }
+
     const conversations = await fetchAllCallConversations();
 
     // For "recent" mode (polling), only get last 20 conversations
