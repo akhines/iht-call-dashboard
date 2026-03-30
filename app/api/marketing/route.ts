@@ -116,6 +116,25 @@ async function fetchAllSellerLeads(): Promise<LeadRecord[]> {
   return leads;
 }
 
+// Cache contact lookups to avoid redundant API calls
+const contactSourceCache = new Map<string, string>();
+
+async function getContactChannel(contactId: string): Promise<string> {
+  if (!contactId) return "Other";
+  if (contactSourceCache.has(contactId)) return contactSourceCache.get(contactId)!;
+
+  const res = await fetch(`${BASE}/contacts/${contactId}`, { headers: getHeaders() });
+  if (!res.ok) { contactSourceCache.set(contactId, "Other"); return "Other"; }
+  const data = await res.json();
+  const c = data.contact || {};
+  const cfs: Record<string, string> = {};
+  for (const cf of c.customFields || []) cfs[cf.id] = cf.value;
+  const campaign = cfs[MARKETING_CAMPAIGN_FIELD] || "";
+  const channel = getChannel(c.source || "", campaign);
+  contactSourceCache.set(contactId, channel);
+  return channel;
+}
+
 async function fetchAllAppts(): Promise<ApptRecord[]> {
   const appts: ApptRecord[] = [];
   const now = Date.now();
@@ -125,26 +144,29 @@ async function fetchAllAppts(): Promise<ApptRecord[]> {
     const res = await fetch(url, { headers: getHeaders() });
     if (!res.ok) continue;
     const data = await res.json();
+    const events = data.events || [];
 
-    for (const e of data.events || []) {
-      if (e.deleted) continue;
-      const title = (e.title || "");
-      const titleLower = title.toLowerCase();
-      const status = e.appointmentStatus || "";
-      const cancelled = status === "cancelled" || titleLower.startsWith("c-") || titleLower.includes("cancel");
-      const endTime = new Date(e.endTime).getTime();
+    // Batch contact lookups
+    const batchSize = 10;
+    for (let i = 0; i < events.length; i += batchSize) {
+      const batch = events.slice(i, i + batchSize);
+      const channels = await Promise.all(
+        batch.map((e: { contactId?: string }) => getContactChannel(e.contactId || ""))
+      );
 
-      let channel = "Other";
-      if (titleLower.includes("*tv") || titleLower.includes("tv ")) channel = "TV";
-      else if (titleLower.includes("*dm") || titleLower.includes("mail")) channel = "Mail";
-      else if (titleLower.includes("ppc") || titleLower.includes("google")) channel = "PPC";
-      else if (titleLower.includes("seo")) channel = "SEO";
+      batch.forEach((e: { deleted?: boolean; title?: string; appointmentStatus?: string; startTime: string; endTime: string }, idx: number) => {
+        if (e.deleted) return;
+        const titleLower = (e.title || "").toLowerCase();
+        const status = e.appointmentStatus || "";
+        const cancelled = status === "cancelled" || titleLower.startsWith("c-") || titleLower.includes("cancel");
+        const endTime = new Date(e.endTime).getTime();
 
-      appts.push({
-        date: new Date(e.startTime).getTime(),
-        channel,
-        cancelled,
-        completed: !cancelled && endTime < now,
+        appts.push({
+          date: new Date(e.startTime).getTime(),
+          channel: channels[idx],
+          cancelled,
+          completed: !cancelled && endTime < now,
+        });
       });
     }
   }
@@ -161,7 +183,8 @@ async function fetchAllDeals(): Promise<DealRecord[]> {
     for (const o of tcData.opportunities || []) {
       const d = new Date(o.createdAt).getTime();
       if (d < JAN1_2026) continue;
-      const channel = getChannel(o.source || "", "");
+      // Get channel from contact source (more reliable than opp source)
+      const channel = o.contactId ? await getContactChannel(o.contactId) : getChannel(o.source || "", "");
 
       // Fetch detail for pricing
       let abPrice = 0, bcPrice = 0, grossProfit = 0;
@@ -193,7 +216,8 @@ async function fetchAllDeals(): Promise<DealRecord[]> {
     for (const o of data.opportunities || []) {
       const d = new Date(o.lastStageChangeAt).getTime();
       if (d < JAN1_2026) continue;
-      deals.push({ date: d, channel: getChannel(o.source || "", ""), category: "closing", abPrice: 0, bcPrice: 0, grossProfit: 0 });
+      const ch = o.contactId ? await getContactChannel(o.contactId) : getChannel(o.source || "", "");
+      deals.push({ date: d, channel: ch, category: "closing", abPrice: 0, bcPrice: 0, grossProfit: 0 });
     }
   }
 
@@ -204,11 +228,11 @@ async function fetchAllDeals(): Promise<DealRecord[]> {
     for (const o of data.opportunities || []) {
       const d = new Date(o.lastStageChangeAt).getTime();
       if (d < JAN1_2026) continue;
-      // Find matching A-B deal for pricing
-      const abDeal = deals.find((deal) => deal.category === "ab" && o.name && deal.channel === getChannel(o.source || "", ""));
+      const ch = o.contactId ? await getContactChannel(o.contactId) : getChannel(o.source || "", "");
+      const abDeal = deals.find((deal) => deal.category === "ab" && deal.channel === ch);
       deals.push({
         date: d,
-        channel: getChannel(o.source || "", ""),
+        channel: ch,
         category: "settled",
         abPrice: abDeal?.abPrice || 0,
         bcPrice: abDeal?.bcPrice || 0,
