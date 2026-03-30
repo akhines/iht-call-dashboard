@@ -45,8 +45,7 @@ const METRICS = [
   { key: "ab", label: "A-B" },
   { key: "closings", label: "Closings" },
   { key: "settled", label: "Settled" },
-  { key: "grossProfit", label: "Gross Profit", fmt: "money" },
-  { key: "mailersSent", label: "Mailers Sent", editable: true, channelOnly: "Mail" },
+  { key: "grossProfit", label: "Profit", fmt: "money" },
 ];
 
 function fmtDate(iso: string) {
@@ -148,7 +147,7 @@ export default function MarketingPage() {
     const val = (data as unknown as Record<string, number>)[metric.key] || 0;
 
     // Editable cell
-    if (metric.editable && (!metric.channelOnly || metric.channelOnly === ch)) {
+    if (metric.editable) {
       const isEditing = editingCell?.weekKey === week.weekKey && editingCell?.channel === ch && editingCell?.metric === metric.key;
       if (isEditing) {
         return (
@@ -169,8 +168,7 @@ export default function MarketingPage() {
       );
     }
 
-    if (metric.channelOnly && metric.channelOnly !== ch) return "";
-    if (metric.fmt === "money") return val > 0 ? fmtMoney(val) : "$0.00";
+    if (metric.fmt === "money") return fmtMoney(val);
     return val || 0;
   }
 
@@ -231,7 +229,7 @@ export default function MarketingPage() {
                   <tr>
                     <th className="bg-gray-700 text-white px-3 py-2 text-xs font-semibold sticky left-0 z-10" rowSpan={2}>Week</th>
                     {channels.map((ch) => {
-                      const metricsForChannel = METRICS.filter((m) => !m.channelOnly || m.channelOnly === ch);
+                      const metricsForChannel = METRICS;
                       return (
                         <th key={ch} colSpan={metricsForChannel.length}
                           className={`${CHANNEL_COLORS[ch] || "bg-gray-500"} text-white text-center px-2 py-2 font-semibold text-xs uppercase tracking-wider border-l-2 border-white/30`}>
@@ -243,7 +241,7 @@ export default function MarketingPage() {
                   {/* Metric sub-headers */}
                   <tr className="bg-gray-50">
                     {channels.map((ch) =>
-                      METRICS.filter((m) => !m.channelOnly || m.channelOnly === ch).map((m) => (
+                      METRICS.map((m) => (
                         <th key={`${ch}-${m.key}`} className="px-2 py-1.5 font-medium text-gray-500 text-[10px] whitespace-nowrap border-r border-gray-100 text-center">
                           {m.label}
                         </th>
@@ -258,9 +256,9 @@ export default function MarketingPage() {
                         {fmtDate(week.startDate)} - {fmtDate(week.endDate)}
                       </td>
                       {channels.map((ch) =>
-                        METRICS.filter((m) => !m.channelOnly || m.channelOnly === ch).map((m) => (
+                        METRICS.map((m) => (
                           <td key={`${week.weekKey}-${ch}-${m.key}`}
-                            className={`px-2 py-1.5 text-center whitespace-nowrap border-r border-gray-50 ${m.editable && (!m.channelOnly || m.channelOnly === ch) ? "bg-yellow-50/50" : ""}`}>
+                            className={`px-2 py-1.5 text-center whitespace-nowrap border-r border-gray-50 ${m.editable ? "bg-yellow-50/50" : ""}`}>
                             {renderValue(week, ch, m)}
                           </td>
                         ))
@@ -272,13 +270,13 @@ export default function MarketingPage() {
                   <tr className="bg-emerald-50 border-t-2 border-emerald-300 font-bold">
                     <td className="px-3 py-2 text-emerald-900 sticky left-0 bg-emerald-50 z-[5] border-r border-emerald-100">2026 Total</td>
                     {channels.map((ch) =>
-                      METRICS.filter((m) => !m.channelOnly || m.channelOnly === ch).map((m) => {
+                      METRICS.map((m) => {
                         const t = channelTotals[ch];
                         if (!t) return <td key={`tot-${ch}-${m.key}`} className="px-2 py-1.5 text-center border-r border-emerald-100">0</td>;
                         const val = (t as unknown as Record<string, number>)[m.key] || 0;
                         return (
                           <td key={`tot-${ch}-${m.key}`} className="px-2 py-1.5 text-center text-emerald-900 border-r border-emerald-100">
-                            {m.channelOnly && m.channelOnly !== ch ? "" : m.fmt === "money" ? fmtMoney(val) : val}
+                            {m.fmt === "money" ? fmtMoney(val) : val}
                           </td>
                         );
                       })
@@ -289,12 +287,12 @@ export default function MarketingPage() {
                   <tr className="bg-blue-50 border-t border-blue-200 font-bold">
                     <td className="px-3 py-2 text-blue-900 sticky left-0 bg-blue-50 z-[5] border-r border-blue-100">ROI</td>
                     {channels.map((ch) =>
-                      METRICS.filter((m) => !m.channelOnly || m.channelOnly === ch).map((m, idx) => {
+                      METRICS.map((m, idx) => {
                         const t = channelTotals[ch];
                         if (idx === 0 && t) {
                           const roi = t.spend > 0 ? Math.round(((t.grossProfit - t.spend) / t.spend) * 100) : 0;
                           return (
-                            <td key={`roi-${ch}-${m.key}`} className="px-2 py-1.5 text-center text-blue-900 border-r border-blue-100" colSpan={METRICS.filter((mm) => !mm.channelOnly || mm.channelOnly === ch).length}>
+                            <td key={`roi-${ch}-${m.key}`} className="px-2 py-1.5 text-center text-blue-900 border-r border-blue-100" colSpan={METRICS.length}>
                               {t.spend > 0 ? `${roi}%` : "—"}
                             </td>
                           );
