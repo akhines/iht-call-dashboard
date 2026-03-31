@@ -214,16 +214,29 @@ async function fetchAllDeals(): Promise<DealRecord[]> {
     }
   }
 
-  // Settled = Deals pipeline > Closed Deal, profit = monetaryValue (opportunity value)
+  // Settled = Deals > Closed Deal, use "Closing Confirmed Date B-C" for actual close date
   const DEALS_PIPELINE = "DiGXnGTlQCOMZQJmWQe9";
+  const CLOSING_DATE_FIELD = "bbDP5pNJ96IMth9bQfh8";
   const settledRes = await fetch(`${BASE}/opportunities/search?location_id=${LOCATION_ID()}&pipeline_id=${DEALS_PIPELINE}&pipeline_stage_id=245bc5b3-e2ac-4886-8928-907560ec3f15&limit=100`, { headers: getHeaders() });
   if (settledRes.ok) {
     const data = await settledRes.json();
     for (const o of data.opportunities || []) {
-      const d = new Date(o.lastStageChangeAt).getTime();
+      // Fetch detail for closing date custom field
+      const detailRes = await fetch(`${BASE}/opportunities/${o.id}`, { headers: getHeaders() });
+      if (!detailRes.ok) continue;
+      const detail = await detailRes.json();
+      const opp = detail.opportunity || detail;
+      const cfs: Record<string, string> = {};
+      for (const cf of opp.customFields || []) {
+        cfs[cf.id] = cf.fieldValue || cf.fieldValueString || "";
+      }
+      const closingDate = cfs[CLOSING_DATE_FIELD];
+      if (!closingDate || closingDate < "2026") continue;
+
+      const d = new Date(closingDate).getTime();
       if (d < JAN1_2026) continue;
       const ch = o.contactId ? await getContactChannel(o.contactId) : getChannel(o.source || "", "");
-      deals.push({ date: d, channel: ch, category: "settled", monetaryValue: o.monetaryValue || 0 });
+      deals.push({ date: d, channel: ch, category: "settled", monetaryValue: opp.monetaryValue || 0 });
     }
   }
 

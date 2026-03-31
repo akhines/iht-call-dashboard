@@ -287,13 +287,26 @@ async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
     if (d >= JAN1_2026) opps.push({ date: d, category: "bc_signed", closer: isMike ? "Mike" : "Josh", name: o.name, source: src, monetaryValue: 0 });
   }
 
-  // Settled: Deals pipeline > Closed Deal, profit = monetaryValue (opportunity value)
+  // Settled: Deals > Closed Deal, use "Closing Confirmed Date B-C" custom field for date
+  const CLOSING_DATE_FIELD = "bbDP5pNJ96IMth9bQfh8";
   for (const o of closedDeals) {
-    const d = new Date(o.lastStageChangeAt).getTime();
+    // Fetch detail to get closing date custom field
+    const detailRes = await fetch(`${BASE}/opportunities/${o.id}`, { headers: getHeaders() });
+    if (!detailRes.ok) continue;
+    const detail = await detailRes.json();
+    const opp = detail.opportunity || detail;
+    const cfs: Record<string, string> = {};
+    for (const cf of opp.customFields || []) {
+      cfs[cf.id] = cf.fieldValue || cf.fieldValueString || "";
+    }
+    const closingDate = cfs[CLOSING_DATE_FIELD];
+    if (!closingDate || closingDate < "2026") continue;
+
+    const d = new Date(closingDate).getTime();
     if (d < JAN1_2026) continue;
     const src = o.contactId ? await getContactSource(o.contactId) : o.source;
     const isMike = mikeOffers.some((m) => m.contactId === o.contactId);
-    opps.push({ date: d, category: "settled", closer: isMike ? "Mike" : "Josh", name: o.name, source: src, monetaryValue: o.monetaryValue });
+    opps.push({ date: d, category: "settled", closer: isMike ? "Mike" : "Josh", name: o.name, source: src, monetaryValue: opp.monetaryValue || 0 });
   }
 
   return opps;
