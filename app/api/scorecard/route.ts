@@ -176,47 +176,53 @@ async function getContactSource(contactId: string): Promise<string> {
   return src;
 }
 
-async function fetchAllAppointments2026(): Promise<ApptRecord[]> {
+async function fetchCalendarEvents(calId: string, closer: string): Promise<ApptRecord[]> {
   const appts: ApptRecord[] = [];
   const now = Date.now();
+  const url = `${BASE}/calendars/events?locationId=${LOCATION_ID()}&calendarId=${calId}&startTime=${JAN1_2026}&endTime=${now}`;
+  const res = await fetch(url, { headers: getHeaders() });
+  if (!res.ok) { console.error(`Calendar fetch failed for ${closer}: ${res.status}`); return []; }
+  const data = await res.json();
+  const events = data.events || [];
+  console.log(`Scorecard: ${closer} calendar has ${events.length} events`);
 
-  for (const calId of [MIKE_CALENDAR, JOSH_CALENDAR]) {
-    const closer = calId === MIKE_CALENDAR ? "Mike" : "Josh";
-    const url = `${BASE}/calendars/events?locationId=${LOCATION_ID()}&calendarId=${calId}&startTime=${JAN1_2026}&endTime=${now}`;
-    const res = await fetch(url, { headers: getHeaders() });
-    if (!res.ok) continue;
-    const data = await res.json();
-    const events = data.events || [];
+  // Batch contact lookups for source
+  const batchSize = 10;
+  for (let i = 0; i < events.length; i += batchSize) {
+    const batch = events.slice(i, i + batchSize);
+    const sources = await Promise.all(
+      batch.map((e: { contactId?: string }) => getContactSource(e.contactId || ""))
+    );
+    batch.forEach((e: { deleted?: boolean; title?: string; appointmentStatus?: string; startTime: string; endTime: string }, idx: number) => {
+      if (e.deleted) return;
+      const titleLower = (e.title || "").toLowerCase();
+      const status = e.appointmentStatus || "";
+      const cancelled = status === "cancelled" || titleLower.startsWith("c-") || titleLower.includes("cancel");
+      const endTime = new Date(e.endTime).getTime();
 
-    // Batch contact lookups for source
-    const batchSize = 10;
-    for (let i = 0; i < events.length; i += batchSize) {
-      const batch = events.slice(i, i + batchSize);
-      const sources = await Promise.all(
-        batch.map((e: { contactId?: string }) => getContactSource(e.contactId || ""))
-      );
-      batch.forEach((e: { deleted?: boolean; title?: string; appointmentStatus?: string; startTime: string; endTime: string }, idx: number) => {
-        if (e.deleted) return;
-        const titleLower = (e.title || "").toLowerCase();
-        const status = e.appointmentStatus || "";
-        const cancelled = status === "cancelled" || titleLower.startsWith("c-") || titleLower.includes("cancel");
-        const endTime = new Date(e.endTime).getTime();
-
-        appts.push({
-          date: new Date(e.startTime).getTime(),
-          calendarId: calId,
-          closer,
-          cancelled,
-          completed: !cancelled && endTime < now,
-          rescheduled: titleLower.includes("reschedul"),
-          source: sources[idx],
-          title: e.title || "",
-        });
+      appts.push({
+        date: new Date(e.startTime).getTime(),
+        calendarId: calId,
+        closer,
+        cancelled,
+        completed: !cancelled && endTime < now,
+        rescheduled: titleLower.includes("reschedul"),
+        source: sources[idx],
+        title: e.title || "",
       });
-    }
+    });
   }
-
   return appts;
+}
+
+async function fetchAllAppointments2026(): Promise<ApptRecord[]> {
+  // Fetch both calendars in parallel
+  const [mikeAppts, joshAppts] = await Promise.all([
+    fetchCalendarEvents(MIKE_CALENDAR, "Mike"),
+    fetchCalendarEvents(JOSH_CALENDAR, "Josh"),
+  ]);
+  console.log(`Scorecard: total appts - Mike: ${mikeAppts.length}, Josh: ${joshAppts.length}`);
+  return [...mikeAppts, ...joshAppts];
 }
 
 interface OppRecord {
