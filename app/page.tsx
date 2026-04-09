@@ -109,6 +109,9 @@ const PIE_COLORS = ["#10b981", "#ef4444"];
 
 const POLL_INTERVAL = 45000;
 
+const MenuIcon = () => <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" /></svg>;
+const CloseMenuIcon = () => <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>;
+
 export default function Dashboard() {
   const [calls, setCalls] = useState<CallRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -123,6 +126,7 @@ export default function Dashboard() {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const perPage = 15;
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const fetchCalls = useCallback(async (mode = "full") => {
     try {
@@ -258,13 +262,18 @@ export default function Dashboard() {
 
   return (
     <div className="flex h-screen overflow-hidden">
-      <aside className="w-60 flex-shrink-0 flex flex-col" style={{ background: "#1a1f36" }}>
+      {/* Mobile sidebar backdrop */}
+      {sidebarOpen && (
+        <div className="fixed inset-0 bg-black/50 z-40 lg:hidden" onClick={() => setSidebarOpen(false)} />
+      )}
+      <aside className={`fixed inset-y-0 left-0 z-50 w-60 flex-shrink-0 flex flex-col transform transition-transform duration-200 ease-in-out lg:relative lg:translate-x-0 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}`} style={{ background: "#1a1f36" }}>
         <div className="p-5 border-b border-white/10">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-lg bg-blue-500 flex items-center justify-center">
               <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></svg>
             </div>
             <div><h1 className="text-white font-bold text-sm leading-tight">Impact Home</h1><p className="text-blue-300 text-xs">Call Tracking</p></div>
+            <button className="ml-auto lg:hidden text-gray-400 hover:text-white" onClick={() => setSidebarOpen(false)}><CloseMenuIcon /></button>
           </div>
         </div>
         <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
@@ -280,7 +289,7 @@ export default function Dashboard() {
 
           <div className="pt-4 pb-2 px-3"><p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Date Range</p></div>
           {([["today", "Today"], ["yesterday", "Yesterday"], ["week", "This Week"], ["month", "This Month"], ["quarter", "This Quarter"], ["year", "Year to Date"]] as const).map(([v, l]) => (
-            <button key={v} onClick={() => { setDateRange(v); setPage(1); }}
+            <button key={v} onClick={() => { setDateRange(v); setPage(1); setSidebarOpen(false); }}
               className={`w-full text-left px-3 py-2 rounded-lg text-sm transition ${dateRange === v ? "bg-blue-500/20 text-blue-300 font-medium" : "text-gray-400 hover:text-white hover:bg-white/5"}`}>
               {l}
             </button>
@@ -317,30 +326,37 @@ export default function Dashboard() {
       </aside>
 
       <main className="flex-1 overflow-y-auto bg-gray-50">
-        <header className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between sticky top-0 z-10">
-          <div>
-            <h2 className="text-lg font-bold text-gray-900">Call Dashboard</h2>
-            <p className="text-sm text-gray-500">
-              Live call tracking &middot; {calls.length} total calls in 2026
-              {lastUpdated && <span className="ml-2 text-xs text-gray-400">Updated {new Date(lastUpdated).toLocaleTimeString()}</span>}
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            <button onClick={() => { setLoading(true); fetchCalls("full"); }}
-              className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-500 hover:text-gray-700 transition" title="Refresh">
-              <RefreshIcon />
-            </button>
-            {error && <span className="text-red-500 text-xs">{error}</span>}
-            <div className="relative">
-              <span className="absolute inset-y-0 left-3 flex items-center"><SearchIcon /></span>
-              <input type="text" placeholder="Search name, phone, or address..." value={search}
-                onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-                className="pl-9 pr-4 py-2 border border-gray-200 rounded-lg text-sm w-64 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400" />
+        <header className="bg-white border-b border-gray-200 px-4 sm:px-6 py-4 sticky top-0 z-10">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <button className="lg:hidden p-2 -ml-2 rounded-lg text-gray-500 hover:bg-gray-100" onClick={() => setSidebarOpen(true)}>
+                <MenuIcon />
+              </button>
+              <div>
+                <h2 className="text-lg font-bold text-gray-900">Call Dashboard</h2>
+                <p className="text-sm text-gray-500 hidden sm:block">
+                  Live call tracking &middot; {calls.length} total calls in 2026
+                  {lastUpdated && <span className="ml-2 text-xs text-gray-400">Updated {new Date(lastUpdated).toLocaleTimeString()}</span>}
+                </p>
+              </div>
             </div>
+            <div className="flex items-center gap-2 sm:gap-3">
+              <button onClick={() => { setLoading(true); fetchCalls("full"); }}
+                className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-500 hover:text-gray-700 transition" title="Refresh">
+                <RefreshIcon />
+              </button>
+              {error && <span className="text-red-500 text-xs">{error}</span>}
+            </div>
+          </div>
+          <div className="relative mt-3 sm:mt-2">
+            <span className="absolute inset-y-0 left-3 flex items-center"><SearchIcon /></span>
+            <input type="text" placeholder="Search name, phone, or address..." value={search}
+              onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+              className="pl-9 pr-4 py-2 border border-gray-200 rounded-lg text-sm w-full sm:w-64 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400" />
           </div>
         </header>
 
-        <div className="p-6 space-y-6">
+        <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
           <div className="flex items-center gap-2">
             <span className="relative flex h-2.5 w-2.5">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
@@ -364,35 +380,39 @@ export default function Dashboard() {
               color="bg-purple-50 text-purple-600" />
           </div>
 
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-2 text-sm text-gray-600 font-medium"><FilterIcon /> Filters</div>
-            <select value={dateRange} onChange={(e) => { setDateRange(e.target.value); setPage(1); }}
-              className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20">
-              <option value="today">Today</option>
-              <option value="yesterday">Yesterday</option>
-              <option value="week">This Week</option>
-              <option value="month">This Month</option>
-              <option value="quarter">This Quarter</option>
-              <option value="year">Year to Date</option>
-            </select>
-            <select value={numberFilter} onChange={(e) => { setNumberFilter(e.target.value); setPage(1); }}
-              className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20">
-              <option value="">All Numbers</option>
-              {numberNames.map((n) => <option key={n} value={n}>{n}</option>)}
-            </select>
-            <select value={connFilter} onChange={(e) => { setConnFilter(e.target.value); setPage(1); }}
-              className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20">
-              <option value="">All Calls</option>
-              <option value="connected">Connected</option>
-              <option value="missed">Not Connected</option>
-            </select>
-            <select value={dirFilter} onChange={(e) => { setDirFilter(e.target.value); setPage(1); }}
-              className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20">
-              <option value="">All Directions</option>
-              <option value="inbound">Inbound</option>
-              <option value="outbound">Outbound</option>
-            </select>
-            {hasFilters && <button onClick={clearFilters} className="ml-auto text-sm text-red-500 hover:text-red-700 font-medium">Clear All</button>}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+            <div className="flex items-center justify-between mb-3 sm:mb-0">
+              <div className="flex items-center gap-2 text-sm text-gray-600 font-medium"><FilterIcon /> Filters</div>
+              {hasFilters && <button onClick={clearFilters} className="text-sm text-red-500 hover:text-red-700 font-medium">Clear All</button>}
+            </div>
+            <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 sm:gap-3 mt-2 sm:mt-3">
+              <select value={dateRange} onChange={(e) => { setDateRange(e.target.value); setPage(1); }}
+                className="border border-gray-200 rounded-lg px-3 py-2 sm:py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20">
+                <option value="today">Today</option>
+                <option value="yesterday">Yesterday</option>
+                <option value="week">This Week</option>
+                <option value="month">This Month</option>
+                <option value="quarter">This Quarter</option>
+                <option value="year">Year to Date</option>
+              </select>
+              <select value={numberFilter} onChange={(e) => { setNumberFilter(e.target.value); setPage(1); }}
+                className="border border-gray-200 rounded-lg px-3 py-2 sm:py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20">
+                <option value="">All Numbers</option>
+                {numberNames.map((n) => <option key={n} value={n}>{n}</option>)}
+              </select>
+              <select value={connFilter} onChange={(e) => { setConnFilter(e.target.value); setPage(1); }}
+                className="border border-gray-200 rounded-lg px-3 py-2 sm:py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20">
+                <option value="">All Calls</option>
+                <option value="connected">Connected</option>
+                <option value="missed">Not Connected</option>
+              </select>
+              <select value={dirFilter} onChange={(e) => { setDirFilter(e.target.value); setPage(1); }}
+                className="border border-gray-200 rounded-lg px-3 py-2 sm:py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20">
+                <option value="">All Directions</option>
+                <option value="inbound">Inbound</option>
+                <option value="outbound">Outbound</option>
+              </select>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
@@ -438,11 +458,46 @@ export default function Dashboard() {
           </div>
 
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+            <div className="px-4 sm:px-5 py-4 border-b border-gray-100 flex items-center justify-between">
               <h3 className="text-sm font-semibold text-gray-700">Call Log</h3>
               <span className="text-xs text-gray-400">{filtered.length} calls</span>
             </div>
-            <div className="overflow-x-auto">
+            {/* Mobile card layout */}
+            <div className="sm:hidden divide-y divide-gray-100">
+              {paged.map((c) => (
+                <div key={c.id} className="px-4 py-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <a href={ghlLink(c.callerPhone)} target="_blank" rel="noopener noreferrer"
+                      className="text-blue-600 hover:text-blue-800 font-medium text-sm truncate max-w-[60%]">
+                      {cleanName(c.contactName)}<LinkIcon />
+                    </a>
+                    <div className="flex items-center gap-1.5">
+                      {c.direction === "inbound"
+                        ? <Badge color="blue"><InboundIcon /><span className="ml-1">In</span></Badge>
+                        : <Badge color="purple"><OutboundIcon /><span className="ml-1">Out</span></Badge>}
+                      {c.callStatus === "Connected" ? <Badge color="green">Connected</Badge>
+                        : c.callStatus === "Brief" ? <Badge color="amber">Brief</Badge>
+                        : c.callStatus === "Voicemail" ? <Badge color="purple">VM</Badge>
+                        : c.callStatus === "Busy" ? <Badge color="amber">Busy</Badge>
+                        : <Badge color="red">No Answer</Badge>}
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between text-xs text-gray-500">
+                    <span>{fmtDate(c.date)} {fmtTime(c.date)}</span>
+                    <span>{fmtDur(c.durationSecs)}</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="mono text-gray-600">{fmtPhone(c.callerPhone)}</span>
+                    {isLead(c.contactName) && <Badge color="blue">LEAD</Badge>}
+                    {(phoneCounts.get(c.callerPhone) || 0) === 1 && <Badge color="amber">NEW</Badge>}
+                  </div>
+                  {c.address && <p className="text-xs text-gray-400 truncate">{c.address}</p>}
+                  <div className="text-xs text-gray-400">{c.numberName}</div>
+                </div>
+              ))}
+            </div>
+            {/* Desktop table */}
+            <div className="hidden sm:block overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-gray-50 text-left">
@@ -501,24 +556,29 @@ export default function Dashboard() {
               </table>
             </div>
             {totalPages > 1 && (
-              <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-between">
-                <p className="text-xs text-gray-500">Showing {(page - 1) * perPage + 1}&ndash;{Math.min(page * perPage, filtered.length)} of {filtered.length}</p>
+              <div className="px-4 sm:px-5 py-3 border-t border-gray-100 flex items-center justify-between">
+                <p className="text-xs text-gray-500">
+                  <span className="hidden sm:inline">Showing </span>{(page - 1) * perPage + 1}&ndash;{Math.min(page * perPage, filtered.length)} of {filtered.length}
+                </p>
                 <div className="flex items-center gap-1">
                   <button onClick={() => setPage(Math.max(1, page - 1))} disabled={page === 1}
                     className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">Prev</button>
-                  {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
-                    let p: number;
-                    if (totalPages <= 7) p = i + 1;
-                    else if (page <= 4) p = i + 1;
-                    else if (page >= totalPages - 3) p = totalPages - 6 + i;
-                    else p = page - 3 + i;
-                    return (
-                      <button key={p} onClick={() => setPage(p)}
-                        className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition ${page === p ? "bg-blue-500 text-white border-blue-500" : "border-gray-200 hover:bg-gray-50"}`}>
-                        {p}
-                      </button>
-                    );
-                  })}
+                  <span className="hidden sm:contents">
+                    {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
+                      let p: number;
+                      if (totalPages <= 7) p = i + 1;
+                      else if (page <= 4) p = i + 1;
+                      else if (page >= totalPages - 3) p = totalPages - 6 + i;
+                      else p = page - 3 + i;
+                      return (
+                        <button key={p} onClick={() => setPage(p)}
+                          className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition ${page === p ? "bg-blue-500 text-white border-blue-500" : "border-gray-200 hover:bg-gray-50"}`}>
+                          {p}
+                        </button>
+                      );
+                    })}
+                  </span>
+                  <span className="sm:hidden text-xs text-gray-500 px-2">{page}/{totalPages}</span>
                   <button onClick={() => setPage(Math.min(totalPages, page + 1))} disabled={page === totalPages}
                     className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">Next</button>
                 </div>

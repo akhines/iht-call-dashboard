@@ -3,6 +3,7 @@ import { kv } from "@vercel/kv";
 import { fetchAllCalls2026 } from "@/app/lib/ghl-calls";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 120;
 
 const CACHE_KEY = "scorecard_cache";
 
