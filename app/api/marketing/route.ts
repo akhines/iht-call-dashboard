@@ -105,6 +105,12 @@ async function fetchAllSellerLeads(): Promise<LeadRecord[]> {
       const cfs: Record<string, string> = {};
       for (const cf of c.customFields || []) cfs[cf.id] = cf.value;
 
+      // Pre-populate channel cache for ALL contacts we see (saves API calls later)
+      if (c.id) {
+        const campaign = cfs[MARKETING_CAMPAIGN_FIELD] || "";
+        contactSourceCache.set(c.id, getChannel(c.source || "", campaign));
+      }
+
       if (cfs[CONTACT_TYPE_FIELD] === "Seller") {
         const campaign = cfs[MARKETING_CAMPAIGN_FIELD] || "";
         leads.push({
@@ -122,6 +128,7 @@ async function fetchAllSellerLeads(): Promise<LeadRecord[]> {
     const lastCreated = new Date(contacts[contacts.length - 1].dateAdded).getTime();
     if (lastCreated < JAN1_2026) break;
   }
+  console.log(`Marketing: pre-cached ${contactSourceCache.size} contact channels from lead fetch`);
   return leads;
 }
 
@@ -155,8 +162,8 @@ async function fetchAllAppts(): Promise<ApptRecord[]> {
     const data = await res.json();
     const events = data.events || [];
 
-    // Batch contact lookups
-    const batchSize = 10;
+    // Batch contact lookups (larger batches since many will be cache hits)
+    const batchSize = 25;
     for (let i = 0; i < events.length; i += batchSize) {
       const batch = events.slice(i, i + batchSize);
       const channels = await Promise.all(
@@ -303,12 +310,13 @@ export async function GET(request: Request) {
     const weeks = getWeeks2026();
 
     console.log("Marketing: fetching fresh GHL data...");
-    const [allLeads, allAppts, allDeals] = await Promise.all([
-      fetchAllSellerLeads(),
+    // Fetch leads FIRST to pre-populate contactSourceCache, then appts+deals in parallel
+    const allLeads = await fetchAllSellerLeads();
+    const [allAppts, allDeals] = await Promise.all([
       fetchAllAppts(),
       fetchAllDeals(),
     ]);
-    console.log(`Marketing: ${allLeads.length} leads, ${allAppts.length} appts, ${allDeals.length} deals`);
+    console.log(`Marketing: ${allLeads.length} leads, ${allAppts.length} appts, ${allDeals.length} deals (cache hits: ${contactSourceCache.size})`);
 
     // Load manual inputs from KV
     let manualInputs: Record<string, Record<string, { spend?: number; mailersSent?: number }>> = {};
