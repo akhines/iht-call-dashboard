@@ -135,20 +135,9 @@ async function fetchAllSellerLeads(): Promise<LeadRecord[]> {
 // Cache contact lookups to avoid redundant API calls
 const contactSourceCache = new Map<string, string>();
 
-async function getContactChannel(contactId: string): Promise<string> {
+function getContactChannelCached(contactId: string): string {
   if (!contactId) return "Other";
-  if (contactSourceCache.has(contactId)) return contactSourceCache.get(contactId)!;
-
-  const res = await fetch(`${BASE}/contacts/${contactId}`, { headers: getHeaders() });
-  if (!res.ok) { contactSourceCache.set(contactId, "Other"); return "Other"; }
-  const data = await res.json();
-  const c = data.contact || {};
-  const cfs: Record<string, string> = {};
-  for (const cf of c.customFields || []) cfs[cf.id] = cf.value;
-  const campaign = cfs[MARKETING_CAMPAIGN_FIELD] || "";
-  const channel = getChannel(c.source || "", campaign);
-  contactSourceCache.set(contactId, channel);
-  return channel;
+  return contactSourceCache.get(contactId) || "Other";
 }
 
 async function fetchAllAppts(): Promise<ApptRecord[]> {
@@ -162,27 +151,18 @@ async function fetchAllAppts(): Promise<ApptRecord[]> {
     const data = await res.json();
     const events = data.events || [];
 
-    // Batch contact lookups (larger batches since many will be cache hits)
-    const batchSize = 25;
-    for (let i = 0; i < events.length; i += batchSize) {
-      const batch = events.slice(i, i + batchSize);
-      const channels = await Promise.all(
-        batch.map((e: { contactId?: string }) => getContactChannel(e.contactId || ""))
-      );
+    for (const e of events) {
+      if (e.deleted) continue;
+      const titleLower = (e.title || "").toLowerCase();
+      const status = e.appointmentStatus || "";
+      const cancelled = status === "cancelled" || titleLower.startsWith("c-") || titleLower.includes("cancel");
+      const endTime = new Date(e.endTime).getTime();
 
-      batch.forEach((e: { deleted?: boolean; title?: string; appointmentStatus?: string; startTime: string; endTime: string }, idx: number) => {
-        if (e.deleted) return;
-        const titleLower = (e.title || "").toLowerCase();
-        const status = e.appointmentStatus || "";
-        const cancelled = status === "cancelled" || titleLower.startsWith("c-") || titleLower.includes("cancel");
-        const endTime = new Date(e.endTime).getTime();
-
-        appts.push({
-          date: new Date(e.startTime).getTime(),
-          channel: channels[idx],
-          cancelled,
-          completed: !cancelled && endTime < now,
-        });
+      appts.push({
+        date: new Date(e.startTime).getTime(),
+        channel: getContactChannelCached(e.contactId || ""),
+        cancelled,
+        completed: !cancelled && endTime < now,
       });
     }
   }
@@ -199,7 +179,7 @@ async function fetchAllDeals(): Promise<DealRecord[]> {
     for (const o of tcData.opportunities || []) {
       const d = new Date(o.createdAt).getTime();
       if (d < JAN1_2026) continue;
-      const channel = o.contactId ? await getContactChannel(o.contactId) : getChannel(o.source || "", "");
+      const channel = o.contactId ? getContactChannelCached(o.contactId) : getChannel(o.source || "", "");
       deals.push({ date: d, channel, category: "ab", monetaryValue: o.monetaryValue || 0 });
     }
   }
@@ -216,7 +196,7 @@ async function fetchAllDeals(): Promise<DealRecord[]> {
     for (const o of data.opportunities || []) {
       const d = new Date(o.lastStageChangeAt).getTime();
       if (d < JAN1_2026) continue;
-      const ch = o.contactId ? await getContactChannel(o.contactId) : getChannel(o.source || "", "");
+      const ch = o.contactId ? getContactChannelCached(o.contactId) : getChannel(o.source || "", "");
       deals.push({ date: d, channel: ch, category: "closing", monetaryValue: o.monetaryValue || 0 });
     }
   }
@@ -242,7 +222,7 @@ async function fetchAllDeals(): Promise<DealRecord[]> {
 
       const d = new Date(closingDate).getTime();
       if (d < JAN1_2026) continue;
-      const ch = o.contactId ? await getContactChannel(o.contactId) : getChannel(o.source || "", "");
+      const ch = o.contactId ? getContactChannelCached(o.contactId) : getChannel(o.source || "", "");
       deals.push({ date: d, channel: ch, category: "settled", monetaryValue: opp.monetaryValue || 0 });
     }
   }
