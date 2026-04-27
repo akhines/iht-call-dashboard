@@ -280,6 +280,13 @@ export interface WeekData {
   apptsBySource: SourceBreakdown;
   abBySource: SourceBreakdown;
   settledBySource: SourceBreakdown;
+  // Per-source gross profit for settled deals (sum of monetaryValue from each
+  // settled opportunity, keyed by the same source string used in
+  // `settledBySource`). Marketing builder reads this so its per-channel
+  // grossProfit numbers DERIVE from scorecard truth instead of being
+  // computed independently. Source-only attribution — never tiebreaker via
+  // campaign field. Single source of truth for financial decisions.
+  grossProfitBySource: SourceBreakdown;
   mikeAppts: number;
   mikeOffers: number;
   mikeSigned: number;
@@ -939,9 +946,11 @@ export async function buildFreshScorecard(): Promise<ScorecardData> {
       });
 
     const settledBySource: SourceBreakdown = {};
+    const grossProfitBySource: SourceBreakdown = {};
     settledOpps.forEach((o) => {
       const src = o.source || "Other";
       settledBySource[src] = (settledBySource[src] || 0) + 1;
+      grossProfitBySource[src] = (grossProfitBySource[src] || 0) + (o.monetaryValue || 0);
     });
 
     const mikeAppts = weekAppts.filter((a) => a.closer === "Mike" && !a.cancelled).length;
@@ -1037,6 +1046,7 @@ export async function buildFreshScorecard(): Promise<ScorecardData> {
       apptsBySource,
       abBySource,
       settledBySource,
+      grossProfitBySource,
       mikeAppts,
       mikeOffers: weekOpps.filter((o) => o.category === "offer_mike").length,
       mikeSigned: weekOpps.filter(

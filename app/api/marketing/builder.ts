@@ -1,3 +1,12 @@
+import { kv } from "@vercel/kv";
+import {
+  FRESH_KEY as SCORECARD_FRESH_KEY,
+  weekKey as scorecardWeekKey,
+  type ScorecardCachePayload,
+  type WeekCacheEntry as ScorecardWeekCacheEntry,
+  type WeekData as ScorecardWeekData,
+} from "../scorecard/builder";
+
 export const FRESH_KEY = "marketing_cache_v3";
 export const MANUAL_INPUTS_KEY = "marketing_inputs";
 
@@ -716,6 +725,210 @@ function applySheetSpend(
   });
 }
 
+/**
+ * Read scorecard's KV cache and return a map of weekKey → ScorecardWeekData.
+ *
+ * Strategy (in order):
+ *   1. Per-week keys `scorecard_week_v1_{monday}` via mget — this is the
+ *      authoritative store the scorecard GET reads from.
+ *   2. Legacy aggregate `scorecard_cache_v3` — fallback if per-week store
+ *      is cold (e.g. fresh deploy hasn't run ?all=true yet).
+ *   3. Empty map — caller falls back to marketing's own attribution.
+ *
+ * On miss we log loudly so a drift can be spotted in Vercel logs.
+ */
+async function fetchScorecardWeeksFromKV(
+  weekKeys: string[]
+): Promise<Map<string, ScorecardWeekData>> {
+  const out = new Map<string, ScorecardWeekData>();
+  try {
+    const kvKeys = weekKeys.map((k) => scorecardWeekKey(k));
+    const entries = (await kv.mget<ScorecardWeekCacheEntry[]>(...kvKeys)) || [];
+    let perWeekHits = 0;
+    for (let i = 0; i < weekKeys.length; i++) {
+      const e = entries[i];
+      if (e && e.data) {
+        out.set(weekKeys[i], e.data);
+        perWeekHits += 1;
+      }
+    }
+    if (perWeekHits > 0) {
+      console.log(
+        `Marketing override: scorecard per-week store hit ${perWeekHits}/${weekKeys.length} weeks`
+      );
+    }
+    if (perWeekHits === weekKeys.length) return out;
+
+    // Per-week store partial / cold — fill gaps from legacy aggregate.
+    const legacy = await kv.get<ScorecardCachePayload>(SCORECARD_FRESH_KEY);
+    if (legacy && legacy.data && legacy.data.weeks) {
+      let aggHits = 0;
+      for (const w of legacy.data.weeks) {
+        if (!out.has(w.startDate)) {
+          out.set(w.startDate, w);
+          aggHits += 1;
+        }
+      }
+      if (aggHits > 0) {
+        console.log(
+          `Marketing override: scorecard legacy aggregate filled ${aggHits} additional weeks`
+        );
+      }
+    }
+  } catch (e) {
+    console.warn(
+      "Marketing override: scorecard KV read threw; falling back to local attribution:",
+      e
+    );
+  }
+  return out;
+}
+
+/**
+ * OVERRIDE marketing's per-channel `settled` and `grossProfit` for every
+ * week using scorecard's `settledBySource` + `grossProfitBySource`.
+ *
+ * Bucketing: each scorecard source string is mapped into a marketing
+ * channel via the existing `getChannel(source, "")` function. So
+ * "PPC: Google Ads" → PPC, "TV AD" / "TV AD (Forwarded ...)" → TV,
+ * "Referral" → Other.
+ *
+ * Why: scorecard's `settledBySource` is the single source of truth for
+ * settled deal counts and GP. Marketing's per-channel numbers were
+ * computed via a parallel attribution path (resolveOppChannelAsync) that
+ * occasionally drifted from scorecard truth — for YTD 2026 a PPC settled
+ * deal misattributed as TV (PPC=4 vs scorecard's 5). Deriving from
+ * scorecard removes the entire class of drift.
+ *
+ * monthSplits per-channel settled/GP also get overridden for the same
+ * reason — using scorecard's `monthSplits.settled/grossProfit` lumped at
+ * the week level we know the per-channel split via source bucketing of
+ * the week's `settledBySource` ratio. (For cross-month boundary weeks
+ * with multiple settled deals across channels AND months, we fall back
+ * to marketing's own per-deal attribution since scorecard's monthSplit
+ * loses the source dimension.)
+ *
+ * Untouched: leads, appts, ab, closings — they have their own
+ * attribution paths and aren't part of the financial-decision surface
+ * this fix is targeting.
+ */
+function overrideSettledFromScorecard(
+  weekData: MarketingWeekData[],
+  scorecardByWeek: Map<string, ScorecardWeekData>
+): MarketingWeekData[] {
+  if (scorecardByWeek.size === 0) {
+    console.warn(
+      "Marketing override: scorecard map empty — leaving local settled/GP in place"
+    );
+    return weekData;
+  }
+
+  return weekData.map((w) => {
+    const scWeek = scorecardByWeek.get(w.weekKey);
+    if (!scWeek) {
+      console.warn(
+        `Marketing override: no scorecard week for ${w.weekKey} — leaving local`
+      );
+      return w;
+    }
+
+    // Bucket scorecard's per-source counts + GP into marketing channels.
+    const settledByChannel: Record<string, number> = {};
+    const gpByChannel: Record<string, number> = {};
+    for (const ch of CHANNELS) {
+      settledByChannel[ch] = 0;
+      gpByChannel[ch] = 0;
+    }
+
+    const settledBySource = scWeek.settledBySource || {};
+    const gpBySource = scWeek.grossProfitBySource || {};
+
+    for (const [source, count] of Object.entries(settledBySource)) {
+      const ch = getChannel(source, "");
+      settledByChannel[ch] = (settledByChannel[ch] || 0) + (count || 0);
+    }
+    for (const [source, gp] of Object.entries(gpBySource)) {
+      const ch = getChannel(source, "");
+      gpByChannel[ch] = (gpByChannel[ch] || 0) + (gp || 0);
+    }
+
+    // OVERWRITE per-channel settled + grossProfit. Leave everything else.
+    const channels: Record<string, ChannelWeekData> = {};
+    for (const ch of CHANNELS) {
+      const existing = w.channels[ch] || {
+        leads: 0,
+        appts: 0,
+        ab: 0,
+        closings: 0,
+        settled: 0,
+        grossProfit: 0,
+        spend: 0,
+        mailersSent: 0,
+      };
+      channels[ch] = {
+        ...existing,
+        settled: settledByChannel[ch] || 0,
+        grossProfit: gpByChannel[ch] || 0,
+      };
+    }
+
+    // monthSplits: if scorecard week has monthSplits (cross-month boundary),
+    // we need to scale per-channel settled/GP across months. Scorecard's
+    // monthSplit gives total settled/GP per month but not per source — so
+    // for boundary weeks we proportionally distribute the channel totals
+    // by the month split ratio. If the week has only ONE month bucket
+    // populated (the common case), the entire channel total goes there.
+    let monthSplits = w.monthSplits;
+    if (scWeek.monthSplits && Object.keys(scWeek.monthSplits).length > 0) {
+      const monthEntries = Object.entries(scWeek.monthSplits);
+      const totalSettledAcrossMonths = monthEntries.reduce(
+        (a, [, m]) => a + (m.settled || 0),
+        0
+      );
+      const totalGpAcrossMonths = monthEntries.reduce(
+        (a, [, m]) => a + (m.grossProfit || 0),
+        0
+      );
+
+      const newMonthSplits: MarketingMonthSplits = {};
+      for (const ch of CHANNELS) {
+        const existingChMs = w.monthSplits?.[ch] || {};
+        newMonthSplits[ch] = {};
+        // Preserve leads/appts/ab/closings month splits, only replace
+        // settled + grossProfit per month.
+        for (const [monthName, scMonth] of monthEntries) {
+          const existing = existingChMs[monthName] || {
+            leads: 0,
+            appts: 0,
+            ab: 0,
+            closings: 0,
+            settled: 0,
+            grossProfit: 0,
+          };
+          // Proportional split of the channel's total settled/GP based on
+          // the share of total settled/GP that fell in this month.
+          const settledRatio =
+            totalSettledAcrossMonths > 0
+              ? (scMonth.settled || 0) / totalSettledAcrossMonths
+              : 0;
+          const gpRatio =
+            totalGpAcrossMonths > 0
+              ? (scMonth.grossProfit || 0) / totalGpAcrossMonths
+              : 0;
+          newMonthSplits[ch][monthName] = {
+            ...existing,
+            settled: Math.round((settledByChannel[ch] || 0) * settledRatio),
+            grossProfit: (gpByChannel[ch] || 0) * gpRatio,
+          };
+        }
+      }
+      monthSplits = newMonthSplits;
+    }
+
+    return { ...w, channels, monthSplits };
+  });
+}
+
 export async function buildFreshMarketing(): Promise<MarketingData> {
   const weeks = getWeeks2026();
 
@@ -734,7 +947,16 @@ export async function buildFreshMarketing(): Promise<MarketingData> {
   );
 
   const baseWeekData = buildWeekData(weeks, allLeads, allAppts, allDeals);
-  const weekData = applySheetSpend(baseWeekData, sheetSpend);
+  const withSpend = applySheetSpend(baseWeekData, sheetSpend);
+
+  // OVERRIDE per-channel settled / grossProfit using scorecard's
+  // settledBySource (single source of truth). Scorecard MUST be refreshed
+  // FIRST so its KV has up-to-date settledBySource + grossProfitBySource.
+  // If KV is cold or partial, we fall back to the local attribution we
+  // just computed (logged loudly so drifts are spottable).
+  const weekKeys = withSpend.map((w) => w.weekKey);
+  const scorecardByWeek = await fetchScorecardWeeksFromKV(weekKeys);
+  const weekData = overrideSettledFromScorecard(withSpend, scorecardByWeek);
 
   return {
     weeks: weekData,
