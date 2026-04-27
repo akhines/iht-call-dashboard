@@ -107,16 +107,31 @@ export default function SeoPage() {
             </div>
           </div>
         </header>
-        <div className="flex-1 bg-white">
-          <iframe
-            src="https://datastudio.google.com/embed/reporting/e64d6d7f-064b-49be-83a0-bb44f88aa159/page/kIV1C"
-            width="100%"
-            height="2200"
-            frameBorder="0"
-            style={{ border: 0, width: "100%", minHeight: "2200px" }}
-            allowFullScreen
-            sandbox="allow-storage-access-by-user-activation allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
-          />
+        <div className="flex-1 bg-gray-50 p-4 sm:p-6 space-y-6 overflow-auto">
+          {[
+            { id: "kIV1C", label: "Overview" },
+            { id: "p_m63q9t54bd", label: "Detail" },
+          ].map((p) => (
+            <section
+              key={p.id}
+              className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden"
+            >
+              <div className="px-4 py-3 border-b border-gray-100">
+                <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider">
+                  {p.label}
+                </h3>
+              </div>
+              <iframe
+                src={`https://datastudio.google.com/embed/reporting/e64d6d7f-064b-49be-83a0-bb44f88aa159/page/${p.id}`}
+                width="100%"
+                height="2200"
+                frameBorder="0"
+                style={{ border: 0, width: "100%", display: "block" }}
+                allowFullScreen
+                sandbox="allow-storage-access-by-user-activation allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+              />
+            </section>
+          ))}
         </div>
       </main>
     </div>

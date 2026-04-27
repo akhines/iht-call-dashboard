@@ -112,6 +112,7 @@ export default function GoogleAdsPage() {
             { id: "FumBB", label: "Overview" },
             { id: "vlmBB", label: "Campaigns" },
             { id: "MkmBB", label: "Keywords / Performance" },
+            { id: "ZrmBB", label: "Audiences / Demographics" },
           ].map((p) => (
             <section
               key={p.id}
