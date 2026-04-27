@@ -419,10 +419,16 @@ function buildWeekData(
   allAppts: ApptRecord[],
   allDeals: DealRecord[]
 ): MarketingWeekData[] {
+  // Reconcile lead count to scorecard: only sellers WITH an address count
+  // as "leads". Scorecard's /api/scorecard YTD uses `weekSellers.filter(
+  // s => s.hasAddress)` to derive its leads number — without this filter
+  // /api/marketing was reporting 205 (all sellers) vs scorecard's 191
+  // (sellers with address). Filtering here keeps both surfaces aligned.
+  const addressableLeads = allLeads.filter((l) => l.hasAddress);
   return weeks.map((w) => {
     const channels: Record<string, ChannelWeekData> = {};
     for (const ch of CHANNELS) {
-      const weekLeads = allLeads.filter(
+      const weekLeads = addressableLeads.filter(
         (l) => l.channel === ch && findWeekKey(new Date(l.date), weeks) === w.key
       );
       const weekAppts = allAppts.filter(

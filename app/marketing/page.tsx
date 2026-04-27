@@ -98,6 +98,18 @@ function fmtCostPer(spend: number, count: number): string {
   return `$${Math.round(v).toLocaleString("en-US")}`;
 }
 
+// ROI as a multiplier (e.g. 1.74X), not a percent. Formula:
+//   roi = grossProfit / spend  (when spend > 0)
+// Color rule lives at the call-site so the same number can be themed
+// for KPI tiles vs cards. Returns "—" when there is no spend so empty
+// channels show a dash.
+function fmtRoiX(grossProfit: number, spend: number): string {
+  if (!spend || spend <= 0) return "—";
+  const v = grossProfit / spend;
+  if (!isFinite(v)) return "—";
+  return `${v.toFixed(2)}X`;
+}
+
 const RefreshIcon = () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>;
 
 // Client-side cache
@@ -279,14 +291,19 @@ export default function MarketingPage() {
       grossProfit,
       avgCpl: leads > 0 ? spend / leads : 0,
       avgCpa: appts > 0 ? spend / appts : 0,
-      avgCpc: closings > 0 ? spend / closings : 0,
+      // Avg cost per closing uses SETTLED (scorecard truth, 10 YTD), not
+      // the closer-pipeline stage count which historically diverges.
+      avgCpc: settled > 0 ? spend / settled : 0,
     };
   }, [channelTotals]);
 
   // Top-Line KPI computations:
   //   - Cost per Contract = YTD spend / YTD ab (contracts signed)
-  //   - Cost per Closed Deal = YTD spend / YTD closings
-  //   - Marketing ROI = (grossProfit - spend) / spend * 100
+  //   - Cost per Closed Deal = YTD spend / YTD SETTLED (closing-date keyed,
+  //     reconciles to scorecard's `settled` count of 10 — the prior
+  //     `closings` field was Mike/Josh closer-pipeline stage count which
+  //     diverges from scorecard truth).
+  //   - Marketing ROI = grossProfit / spend  → multiplier (e.g. 1.74X)
   //   - Leads MTD vs prior month — uses week.startDate to bucket
   //   - Contracts Signed MTD = sum of ab across current calendar-month weeks
   const topLineKpis = useMemo(() => {
@@ -325,12 +342,15 @@ export default function MarketingPage() {
 
     const spend = ytdAllTotals.spend;
     const ab = ytdAllTotals.ab;
-    const closings = ytdAllTotals.closings;
+    // Closings = settled (closing-date keyed) so this denominator
+    // matches scorecard truth (10 YTD), not the closer-pipeline count.
+    const closings = ytdAllTotals.settled;
     const gp = ytdAllTotals.grossProfit;
 
     const costPerContract = ab > 0 ? spend / ab : 0;
     const costPerClosed = closings > 0 ? spend / closings : 0;
-    const roiPct = spend > 0 ? ((gp - spend) / spend) * 100 : 0;
+    // ROI as multiplier — gross profit / spend.
+    const roiX = spend > 0 ? gp / spend : 0;
 
     const leadsDelta = mtdLeads - prevMonthLeads;
     const leadsPctChange =
@@ -343,7 +363,7 @@ export default function MarketingPage() {
       hasContracts: ab > 0,
       costPerClosed,
       hasClosings: closings > 0,
-      roiPct,
+      roiX,
       hasSpend: spend > 0,
       mtdLeads,
       prevMonthLeads,
@@ -513,7 +533,9 @@ export default function MarketingPage() {
                   </p>
                 </div>
 
-                {/* 3. Marketing ROI */}
+                {/* 3. Marketing ROI — multiplier format (e.g. 1.74X). Green
+                    when ≥ 1.0X (profitable), red when < 1.0X (losing money),
+                    gray when no spend. */}
                 <div className="bg-gray-50 border border-gray-100 rounded-lg p-3">
                   <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">
                     Marketing ROI
@@ -522,19 +544,17 @@ export default function MarketingPage() {
                     className={`text-lg font-bold mt-1 ${
                       !topLineKpis.hasSpend
                         ? "text-gray-900"
-                        : topLineKpis.roiPct > 0
+                        : topLineKpis.roiX >= 1
                           ? "text-emerald-600"
-                          : topLineKpis.roiPct < 0
-                            ? "text-rose-600"
-                            : "text-gray-900"
+                          : "text-rose-600"
                     }`}
                   >
                     {topLineKpis.hasSpend
-                      ? `${Math.round(topLineKpis.roiPct).toLocaleString("en-US")}%`
+                      ? `${topLineKpis.roiX.toFixed(2)}X`
                       : "—"}
                   </p>
                   <p className="text-[10px] text-gray-400 mt-0.5">
-                    (Profit − Spend) ÷ Spend
+                    Gross Profit ÷ Spend
                   </p>
                 </div>
 
@@ -617,18 +637,14 @@ export default function MarketingPage() {
                       CHANNEL_BADGE[ch] ||
                       "bg-gray-100 text-gray-700 border-gray-200";
                     const hasSpend = (t.spend || 0) > 0;
-                    const roi = hasSpend
-                      ? Math.round(
-                          ((t.grossProfit - t.spend) / t.spend) * 100,
-                        )
-                      : 0;
+                    // ROI as multiplier — gross profit / spend. Green at
+                    // ≥ 1.0X (profitable), red below.
+                    const roiX = hasSpend ? t.grossProfit / t.spend : 0;
                     const roiColor = !hasSpend
                       ? "text-gray-900"
-                      : roi > 0
+                      : roiX >= 1
                         ? "text-emerald-600"
-                        : roi < 0
-                          ? "text-rose-600"
-                          : "text-gray-900";
+                        : "text-rose-600";
                     return (
                       <div
                         key={`tile-${ch}`}
@@ -670,7 +686,7 @@ export default function MarketingPage() {
                               Closings
                             </p>
                             <p className="text-sm font-semibold text-gray-900">
-                              {t.closings.toLocaleString()}
+                              {t.settled.toLocaleString()}
                             </p>
                           </div>
                         </div>
@@ -684,9 +700,7 @@ export default function MarketingPage() {
                             <p
                               className={`text-2xl font-extrabold leading-none ${roiColor}`}
                             >
-                              {hasSpend
-                                ? `${roi > 0 ? "+" : ""}${roi.toLocaleString("en-US")}%`
-                                : "—"}
+                              {hasSpend ? `${roiX.toFixed(2)}X` : "—"}
                             </p>
                           </div>
                         </div>
@@ -708,7 +722,7 @@ export default function MarketingPage() {
                               Cost / Closing
                             </span>
                             <span className="font-semibold text-gray-900">
-                              {fmtCostPer(t.spend, t.closings)}
+                              {fmtCostPer(t.spend, t.settled)}
                             </span>
                           </div>
                           <div className="flex justify-between text-xs">
@@ -720,7 +734,7 @@ export default function MarketingPage() {
                           <div className="flex justify-between text-xs">
                             <span className="text-gray-500">CAC</span>
                             <span className="font-semibold text-gray-900">
-                              {fmtCostPer(t.spend, t.closings)}
+                              {fmtCostPer(t.spend, t.settled)}
                             </span>
                           </div>
                         </div>
@@ -744,7 +758,7 @@ export default function MarketingPage() {
             );
             if (visible.length === 0) return null;
 
-            const maxOf = (key: "leads" | "appts" | "ab" | "closings") =>
+            const maxOf = (key: "leads" | "appts" | "ab" | "settled") =>
               Math.max(
                 1,
                 ...visible.map((c) => channelTotals[c]?.[key] || 0),
@@ -753,12 +767,12 @@ export default function MarketingPage() {
               leads: maxOf("leads"),
               appts: maxOf("appts"),
               ab: maxOf("ab"),
-              closings: maxOf("closings"),
+              settled: maxOf("settled"),
             };
 
             const renderBar = (
               ch: string,
-              key: "leads" | "appts" | "ab" | "closings",
+              key: "leads" | "appts" | "ab" | "settled",
             ) => {
               const v = channelTotals[ch]?.[key] || 0;
               const pct = Math.round((v / maxes[key]) * 100);
@@ -829,7 +843,7 @@ export default function MarketingPage() {
                             <td className="px-4 py-3">{renderBar(ch, "leads")}</td>
                             <td className="px-4 py-3">{renderBar(ch, "appts")}</td>
                             <td className="px-4 py-3">{renderBar(ch, "ab")}</td>
-                            <td className="px-4 py-3">{renderBar(ch, "closings")}</td>
+                            <td className="px-4 py-3">{renderBar(ch, "settled")}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -887,7 +901,7 @@ export default function MarketingPage() {
                     Closings
                   </p>
                   <p className="text-lg font-bold text-gray-900 mt-1">
-                    {ytdAllTotals.closings.toLocaleString()}
+                    {ytdAllTotals.settled.toLocaleString()}
                   </p>
                 </div>
                 <div className="bg-gray-50 border border-gray-100 rounded-lg p-3">
@@ -995,17 +1009,17 @@ export default function MarketingPage() {
                     )}
                   </tr>
 
-                  {/* ROI row */}
+                  {/* ROI row — multiplier (e.g. 1.74X) so 1.0X is the
+                      breakeven line at a glance. */}
                   <tr className="bg-blue-50 border-t border-blue-200 font-bold">
                     <td className="px-3 py-2 text-blue-900 sticky left-0 bg-blue-50 z-[5] border-r border-blue-100">ROI</td>
                     {visibleChannels.map((ch) =>
                       METRICS.map((m, idx) => {
                         const t = channelTotals[ch];
                         if (idx === 0 && t) {
-                          const roi = t.spend > 0 ? Math.round(((t.grossProfit - t.spend) / t.spend) * 100) : 0;
                           return (
                             <td key={`roi-${ch}-${m.key}`} className="px-2 py-1.5 text-center text-blue-900 border-r border-blue-100" colSpan={METRICS.length}>
-                              {t.spend > 0 ? `${roi}%` : "—"}
+                              {fmtRoiX(t.grossProfit, t.spend)}
                             </td>
                           );
                         }
