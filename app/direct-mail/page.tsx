@@ -171,6 +171,49 @@ export default function DirectMailPage() {
     );
   }, [data]);
 
+  // YTD 2026 totals (all drops with a 2026 date)
+  const ytdDrops = useMemo(() => {
+    if (!data) return [];
+    return data.drops.filter((d) => {
+      const t = parseDateForSort(d.date);
+      if (!t) return false;
+      return new Date(t).getUTCFullYear() === 2026;
+    });
+  }, [data]);
+
+  const ytdTotals = useMemo(() => {
+    const spent = ytdDrops.reduce((s, d) => s + (d.spend || 0), 0);
+    const pieces = ytdDrops.reduce((s, d) => s + (d.piecesMailed || 0), 0);
+    const dropsCount = ytdDrops.filter(
+      (d) => (d.dropCode || "").trim().length > 0,
+    ).length;
+    const leads = ytdDrops.reduce((s, d) => s + (d.leads || 0), 0);
+    const appts = ytdDrops.reduce((s, d) => s + (d.appointments || 0), 0);
+    const abSigned = ytdDrops.reduce((s, d) => s + (d.abSigned || 0), 0);
+    const closings = ytdDrops.reduce((s, d) => s + (d.closings || 0), 0);
+    const avgCpl = leads > 0 ? spent / leads : 0;
+    return { spent, pieces, dropsCount, leads, appts, abSigned, closings, avgCpl };
+  }, [ytdDrops]);
+
+  // YTD per-segment rollup (keep all 4 even if zero)
+  const YTD_SEGMENTS = ["Dataflik", "Inherited", "BCDI", "Nurture"] as const;
+  const ytdBySegment = useMemo(() => {
+    return YTD_SEGMENTS.map((seg) => {
+      const segLower = seg.toLowerCase();
+      const rows = ytdDrops.filter((d) =>
+        (d.segment || "").toLowerCase().includes(segLower),
+      );
+      const spent = rows.reduce((s, d) => s + (d.spend || 0), 0);
+      const pieces = rows.reduce((s, d) => s + (d.piecesMailed || 0), 0);
+      const leads = rows.reduce((s, d) => s + (d.leads || 0), 0);
+      const dropsCount = rows.filter(
+        (d) => (d.dropCode || "").trim().length > 0,
+      ).length;
+      const avgCpl = leads > 0 ? spent / leads : 0;
+      return { segment: seg, spent, pieces, leads, dropsCount, avgCpl };
+    });
+  }, [ytdDrops]);
+
   // ---------- Render ----------
   return (
     <div className="flex h-screen overflow-hidden">
@@ -637,6 +680,146 @@ export default function DirectMailPage() {
                     </tbody>
                   </table>
                 </div>
+              </div>
+            </section>
+
+            {/* ── YTD 2026 Totals ───────────────────────────── */}
+            <section className="pt-4 border-t border-gray-200">
+              <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider">
+                YTD 2026 Totals
+              </h3>
+              <p className="text-xs text-gray-500 mb-4">
+                Year-to-date across all segments &mdash; Q1 + Q2 combined.
+              </p>
+
+              {/* Section A: YTD Wide Snapshot */}
+              <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 mb-4">
+                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
+                  <div className="bg-gray-50 border border-gray-100 rounded-lg p-3">
+                    <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">
+                      Total Spend
+                    </p>
+                    <p className="text-lg font-bold text-gray-900 mt-1">
+                      {fmtMoney0(ytdTotals.spent)}
+                    </p>
+                  </div>
+                  <div className="bg-gray-50 border border-gray-100 rounded-lg p-3">
+                    <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">
+                      Total Drops
+                    </p>
+                    <p className="text-lg font-bold text-gray-900 mt-1">
+                      {ytdTotals.dropsCount}
+                    </p>
+                  </div>
+                  <div className="bg-gray-50 border border-gray-100 rounded-lg p-3">
+                    <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">
+                      Pieces Mailed
+                    </p>
+                    <p className="text-lg font-bold text-gray-900 mt-1">
+                      {ytdTotals.pieces.toLocaleString()}
+                    </p>
+                  </div>
+                  <div className="bg-gray-50 border border-gray-100 rounded-lg p-3">
+                    <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">
+                      Leads
+                    </p>
+                    <p className="text-lg font-bold text-gray-900 mt-1">
+                      {ytdTotals.leads}
+                    </p>
+                  </div>
+                  <div className="bg-gray-50 border border-gray-100 rounded-lg p-3">
+                    <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">
+                      Appointments
+                    </p>
+                    <p className="text-lg font-bold text-gray-900 mt-1">
+                      {ytdTotals.appts}
+                    </p>
+                  </div>
+                  <div className="bg-gray-50 border border-gray-100 rounded-lg p-3">
+                    <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">
+                      A-B Signed
+                    </p>
+                    <p className="text-lg font-bold text-gray-900 mt-1">
+                      {ytdTotals.abSigned}
+                    </p>
+                  </div>
+                  <div className="bg-gray-50 border border-gray-100 rounded-lg p-3">
+                    <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">
+                      Closings
+                    </p>
+                    <p className="text-lg font-bold text-gray-900 mt-1">
+                      {ytdTotals.closings}
+                    </p>
+                  </div>
+                  <div className="bg-gray-50 border border-gray-100 rounded-lg p-3">
+                    <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">
+                      Avg CPL
+                    </p>
+                    <p className="text-lg font-bold text-gray-900 mt-1">
+                      {ytdTotals.leads > 0
+                        ? `$${ytdTotals.avgCpl.toFixed(2)}`
+                        : "—"}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Section B: YTD Per-Segment Tiles */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                {ytdBySegment.map((seg) => (
+                  <div
+                    key={seg.segment}
+                    className="bg-white rounded-xl shadow-sm border border-gray-100 p-4"
+                  >
+                    <div className="flex items-center justify-between mb-3">
+                      <span
+                        className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${segmentColor(seg.segment)}`}
+                      >
+                        {seg.segment}
+                      </span>
+                      <span className="text-xs text-gray-400">
+                        {seg.dropsCount} drop
+                        {seg.dropsCount === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                    <div className="space-y-2 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-gray-500 text-xs uppercase tracking-wider">
+                          YTD Spend
+                        </span>
+                        <span className="font-semibold text-gray-900">
+                          {fmtMoney0(seg.spent)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-500 text-xs uppercase tracking-wider">
+                          Pieces
+                        </span>
+                        <span className="font-semibold text-gray-700">
+                          {seg.pieces.toLocaleString()}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-500 text-xs uppercase tracking-wider">
+                          Leads
+                        </span>
+                        <span className="font-semibold text-gray-700">
+                          {seg.leads}
+                        </span>
+                      </div>
+                      <div className="flex justify-between pt-2 border-t border-gray-100">
+                        <span className="text-gray-500 text-xs uppercase tracking-wider">
+                          Avg CPL
+                        </span>
+                        <span className="font-semibold text-gray-900">
+                          {seg.leads > 0
+                            ? `$${seg.avgCpl.toFixed(2)}`
+                            : "—"}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
             </section>
 
