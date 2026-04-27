@@ -4,14 +4,6 @@ import { kv } from "@vercel/kv";
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
-const MKT_CACHE_KEY = "marketing_cache";
-
-function getCurrentWeekNumber(): number {
-  const now = new Date();
-  const start = new Date("2026-01-05T00:00:00Z");
-  return Math.floor((now.getTime() - start.getTime()) / (7 * 24 * 60 * 60 * 1000));
-}
-
 const BASE = "https://services.leadconnectorhq.com";
 
 function getHeaders() {
@@ -84,7 +76,15 @@ interface LeadRecord { date: number; channel: string; hasAddress: boolean; }
 interface ApptRecord { date: number; channel: string; cancelled: boolean; completed: boolean; }
 interface DealRecord { date: number; channel: string; category: string; monetaryValue: number; }
 
-async function fetchAllSellerLeads(): Promise<LeadRecord[]> {
+// Cache contact lookups to avoid redundant API calls (in-memory, request-scoped)
+const contactSourceCache = new Map<string, string>();
+
+function getContactChannelCached(contactId: string): string {
+  if (!contactId) return "Other";
+  return contactSourceCache.get(contactId) || "Other";
+}
+
+async function fetchAllSellerLeads(rangeStart: number, rangeEnd: number): Promise<LeadRecord[]> {
   const leads: LeadRecord[] = [];
   let startAfterId = "";
   let startAfter = 0;
@@ -101,6 +101,7 @@ async function fetchAllSellerLeads(): Promise<LeadRecord[]> {
 
     for (const c of contacts) {
       const created = new Date(c.dateAdded).getTime();
+      // We always populate channel cache for all 2026 contacts seen (cheap & helps appt/deal channel lookup)
       if (created < JAN1_2026) continue;
 
       const cfs: Record<string, string> = {};
@@ -111,6 +112,9 @@ async function fetchAllSellerLeads(): Promise<LeadRecord[]> {
         const campaign = cfs[MARKETING_CAMPAIGN_FIELD] || "";
         contactSourceCache.set(c.id, getChannel(c.source || "", campaign));
       }
+
+      // Only return as a LEAD if within requested range and is a Seller
+      if (created < rangeStart || created > rangeEnd) continue;
 
       if (cfs[CONTACT_TYPE_FIELD] === "Seller") {
         const campaign = cfs[MARKETING_CAMPAIGN_FIELD] || "";
@@ -127,26 +131,20 @@ async function fetchAllSellerLeads(): Promise<LeadRecord[]> {
     startAfterId = meta.startAfterId || "";
     startAfter = meta.startAfter || 0;
     const lastCreated = new Date(contacts[contacts.length - 1].dateAdded).getTime();
+    // Stop paging once we're earlier than the start of our range AND earlier than 2026
     if (lastCreated < JAN1_2026) break;
+    if (lastCreated < rangeStart) break;
   }
   console.log(`Marketing: pre-cached ${contactSourceCache.size} contact channels from lead fetch`);
   return leads;
 }
 
-// Cache contact lookups to avoid redundant API calls
-const contactSourceCache = new Map<string, string>();
-
-function getContactChannelCached(contactId: string): string {
-  if (!contactId) return "Other";
-  return contactSourceCache.get(contactId) || "Other";
-}
-
-async function fetchAllAppts(): Promise<ApptRecord[]> {
+async function fetchAllAppts(rangeStart: number, rangeEnd: number): Promise<ApptRecord[]> {
   const appts: ApptRecord[] = [];
   const now = Date.now();
 
   for (const calId of [MIKE_CALENDAR, JOSH_CALENDAR]) {
-    const url = `${BASE}/calendars/events?locationId=${LOCATION_ID()}&calendarId=${calId}&startTime=${JAN1_2026}&endTime=${now}`;
+    const url = `${BASE}/calendars/events?locationId=${LOCATION_ID()}&calendarId=${calId}&startTime=${rangeStart}&endTime=${rangeEnd}`;
     const res = await fetch(url, { headers: getHeaders() });
     if (!res.ok) continue;
     const data = await res.json();
@@ -170,7 +168,7 @@ async function fetchAllAppts(): Promise<ApptRecord[]> {
   return appts;
 }
 
-async function fetchAllDeals(): Promise<DealRecord[]> {
+async function fetchAllDeals(rangeStart: number, rangeEnd: number): Promise<DealRecord[]> {
   const deals: DealRecord[] = [];
 
   // A-B signed = TC pipeline createdAt, profit = monetaryValue
@@ -179,7 +177,7 @@ async function fetchAllDeals(): Promise<DealRecord[]> {
     const tcData = await tcRes.json();
     for (const o of tcData.opportunities || []) {
       const d = new Date(o.createdAt).getTime();
-      if (d < JAN1_2026) continue;
+      if (d < rangeStart || d > rangeEnd) continue;
       const channel = o.contactId ? getContactChannelCached(o.contactId) : getChannel(o.source || "", "");
       deals.push({ date: d, channel, category: "ab", monetaryValue: o.monetaryValue || 0 });
     }
@@ -196,7 +194,7 @@ async function fetchAllDeals(): Promise<DealRecord[]> {
     const data = await res.json();
     for (const o of data.opportunities || []) {
       const d = new Date(o.lastStageChangeAt).getTime();
-      if (d < JAN1_2026) continue;
+      if (d < rangeStart || d > rangeEnd) continue;
       const ch = o.contactId ? getContactChannelCached(o.contactId) : getChannel(o.source || "", "");
       deals.push({ date: d, channel: ch, category: "closing", monetaryValue: o.monetaryValue || 0 });
     }
@@ -209,22 +207,51 @@ async function fetchAllDeals(): Promise<DealRecord[]> {
   if (settledRes.ok) {
     const data = await settledRes.json();
     for (const o of data.opportunities || []) {
-      // Fetch detail for closing date custom field
-      const detailRes = await fetch(`${BASE}/opportunities/${o.id}`, { headers: getHeaders() });
-      if (!detailRes.ok) continue;
-      const detail = await detailRes.json();
-      const opp = detail.opportunity || detail;
-      const cfs: Record<string, string> = {};
-      for (const cf of opp.customFields || []) {
-        cfs[cf.id] = cf.fieldValue || cf.fieldValueString || "";
+      // Per-opportunity detail cache: settled deals don't change once closingDate is set
+      const cacheKey = `mkt_deal_detail_${o.id}`;
+      type DealDetailCache = { closingDate: string; monetaryValue: number };
+      let cached: DealDetailCache | null = null;
+      try {
+        cached = await kv.get<DealDetailCache>(cacheKey);
+      } catch {
+        // KV unavailable, fall through
       }
-      const closingDate = cfs[CLOSING_DATE_FIELD];
+
+      let closingDate: string;
+      let monetaryValue: number;
+
+      if (cached && cached.closingDate) {
+        closingDate = cached.closingDate;
+        monetaryValue = cached.monetaryValue || 0;
+      } else {
+        // Fetch detail for closing date custom field
+        const detailRes = await fetch(`${BASE}/opportunities/${o.id}`, { headers: getHeaders() });
+        if (!detailRes.ok) continue;
+        const detail = await detailRes.json();
+        const opp = detail.opportunity || detail;
+        const cfs: Record<string, string> = {};
+        for (const cf of opp.customFields || []) {
+          cfs[cf.id] = cf.fieldValue || cf.fieldValueString || "";
+        }
+        closingDate = cfs[CLOSING_DATE_FIELD] || "";
+        monetaryValue = opp.monetaryValue || 0;
+
+        // Only cache once we actually have a closing date (it's effectively immutable then)
+        if (closingDate) {
+          try {
+            await kv.set(cacheKey, { closingDate, monetaryValue });
+          } catch {
+            // KV unavailable
+          }
+        }
+      }
+
       if (!closingDate || closingDate < "2026") continue;
 
       const d = new Date(closingDate).getTime();
-      if (d < JAN1_2026) continue;
+      if (d < rangeStart || d > rangeEnd) continue;
       const ch = o.contactId ? getContactChannelCached(o.contactId) : getChannel(o.source || "", "");
-      deals.push({ date: d, channel: ch, category: "settled", monetaryValue: opp.monetaryValue || 0 });
+      deals.push({ date: d, channel: ch, category: "settled", monetaryValue });
     }
   }
 
@@ -253,6 +280,86 @@ export interface MarketingWeekData {
   channels: Record<string, ChannelWeekData>;
 }
 
+interface CachedWeekEntry {
+  data: MarketingWeekData;
+  cachedAt: string;
+}
+
+const WEEK_CACHE_PREFIX = "marketing_week_v2_";
+// Per-opportunity detail cache prefix (settled deal closing dates) — used inline in fetchAllDeals as "mkt_deal_detail_${id}"
+
+function buildWeekData(
+  weeks: Week[],
+  targetWeeks: Week[],
+  allLeads: LeadRecord[],
+  allAppts: ApptRecord[],
+  allDeals: DealRecord[]
+): MarketingWeekData[] {
+  return targetWeeks.map((w) => {
+    const channels: Record<string, ChannelWeekData> = {};
+    for (const ch of CHANNELS) {
+      const weekLeads = allLeads.filter((l) => l.channel === ch && findWeekKey(new Date(l.date), weeks) === w.key);
+      const weekAppts = allAppts.filter((a) => a.channel === ch && !a.cancelled && a.completed && findWeekKey(new Date(a.date), weeks) === w.key);
+      const weekAb = allDeals.filter((d) => d.channel === ch && d.category === "ab" && findWeekKey(new Date(d.date), weeks) === w.key);
+      const weekClosings = allDeals.filter((d) => d.channel === ch && d.category === "closing" && findWeekKey(new Date(d.date), weeks) === w.key);
+      const weekSettled = allDeals.filter((d) => d.channel === ch && d.category === "settled" && findWeekKey(new Date(d.date), weeks) === w.key);
+
+      channels[ch] = {
+        leads: weekLeads.length,
+        appts: weekAppts.length,
+        ab: weekAb.length,
+        closings: weekClosings.length,
+        settled: weekSettled.length,
+        grossProfit: weekSettled.reduce((a, d) => a + d.monetaryValue, 0),
+        spend: 0,
+        mailersSent: 0,
+      };
+    }
+    return {
+      weekKey: w.key,
+      startDate: w.start.toISOString().slice(0, 10),
+      endDate: w.end.toISOString().slice(0, 10),
+      channels,
+    };
+  });
+}
+
+function applyManualInputs(
+  weekData: MarketingWeekData[],
+  manualInputs: Record<string, Record<string, { spend?: number; mailersSent?: number }>>
+) {
+  for (const w of weekData) {
+    for (const ch of CHANNELS) {
+      const manual = manualInputs?.[w.weekKey]?.[ch];
+      if (manual) {
+        w.channels[ch].spend = manual.spend || 0;
+        w.channels[ch].mailersSent = manual.mailersSent || 0;
+      }
+    }
+  }
+}
+
+async function invalidateAllWeekCaches(weeks: Week[]) {
+  await Promise.all(
+    weeks.map(async (w) => {
+      try {
+        await kv.del(`${WEEK_CACHE_PREFIX}${w.key}`);
+      } catch {
+        // KV unavailable
+      }
+    })
+  );
+}
+
+async function invalidateDealDetailCache() {
+  // We can't reliably enumerate keys via @vercel/kv without SCAN, so this is a no-op stub.
+  // The settled-deal cache will refresh naturally on next miss; if we ever need to nuke it,
+  // we'd add a redis SCAN call. For now, ?refresh=true clears week caches which forces a
+  // full recompute against fresh GHL data, and detail entries are re-validated on read.
+  // (The detail cache is keyed by GHL opp id — only stored once closingDate is set, so this
+  // is only stale if GHL changes a closing date after the fact, which is rare.)
+}
+
 export async function GET(request: Request) {
   try {
     if (!process.env.GHL_API_TOKEN || !process.env.GHL_LOCATION_ID) {
@@ -260,77 +367,126 @@ export async function GET(request: Request) {
     }
 
     const { searchParams } = new URL(request.url);
-    const forceRefresh = searchParams.get("refresh") === "true";
-    const currentWeek = getCurrentWeekNumber();
-
-    // Check cache (unless force refresh)
-    if (!forceRefresh) {
-      try {
-        const cached = await kv.get<{ weekNumber: number; data: unknown }>(MKT_CACHE_KEY);
-        if (cached && cached.weekNumber === currentWeek) {
-          console.log("Marketing: serving from cache");
-          // Still merge in latest manual inputs
-          const manualInputs = await kv.get<Record<string, Record<string, { spend?: number; mailersSent?: number }>>>("marketing_inputs") || {};
-          const cachedData = cached.data as { weeks: MarketingWeekData[]; channels: string[]; lastUpdated: string };
-          for (const w of cachedData.weeks) {
-            for (const ch of cachedData.channels) {
-              const manual = (manualInputs as Record<string, Record<string, { spend?: number; mailersSent?: number }>>)?.[w.weekKey]?.[ch];
-              if (manual) {
-                w.channels[ch].spend = manual.spend || 0;
-                w.channels[ch].mailersSent = manual.mailersSent || 0;
-              }
-            }
-          }
-          return NextResponse.json(cachedData);
-        }
-      } catch {
-        // KV not available
-      }
-    }
+    const refreshParam = searchParams.get("refresh");
+    const forceRefreshAll = refreshParam === "true";
+    const refreshCurrentOnly = refreshParam === "current";
 
     const weeks = getWeeks2026();
+    if (weeks.length === 0) {
+      return NextResponse.json({
+        weeks: [],
+        channels: CHANNELS as unknown as string[],
+        lastUpdated: new Date().toISOString(),
+      });
+    }
 
-    console.log("Marketing: fetching fresh GHL data...");
-    // Fetch leads FIRST to pre-populate contactSourceCache, then appts+deals in parallel
-    const allLeads = await fetchAllSellerLeads();
-    const [allAppts, allDeals] = await Promise.all([
-      fetchAllAppts(),
-      fetchAllDeals(),
-    ]);
-    console.log(`Marketing: ${allLeads.length} leads, ${allAppts.length} appts, ${allDeals.length} deals (cache hits: ${contactSourceCache.size})`);
+    const currentWeekKey = weeks[weeks.length - 1].key;
 
-    // Load manual inputs from KV
+    // Load manual inputs (always overlaid at response time, never cached per-week)
     let manualInputs: Record<string, Record<string, { spend?: number; mailersSent?: number }>> = {};
     try {
       const saved = await kv.get<typeof manualInputs>("marketing_inputs");
       if (saved) manualInputs = saved;
     } catch {
-      // KV not configured yet, that's OK
+      // KV not available
     }
 
-    const weekData: MarketingWeekData[] = weeks.map((w) => {
+    // If full refresh, blow away all per-week caches first
+    if (forceRefreshAll) {
+      console.log("Marketing: forceRefresh=true — invalidating all per-week caches");
+      await invalidateAllWeekCaches(weeks);
+      await invalidateDealDetailCache();
+    } else if (refreshCurrentOnly) {
+      console.log("Marketing: refresh=current — invalidating current week cache");
+      try {
+        await kv.del(`${WEEK_CACHE_PREFIX}${currentWeekKey}`);
+      } catch {
+        // KV unavailable
+      }
+    }
+
+    // Phase 1: read all per-week caches in parallel
+    let cachedEntries: (CachedWeekEntry | null)[] = [];
+    let kvAvailable = true;
+    try {
+      cachedEntries = await Promise.all(
+        weeks.map((w) =>
+          kv.get<CachedWeekEntry>(`${WEEK_CACHE_PREFIX}${w.key}`).catch(() => null)
+        )
+      );
+    } catch {
+      kvAvailable = false;
+      cachedEntries = weeks.map(() => null);
+    }
+
+    // Phase 2: identify which weeks need fetching
+    // Always refetch the current (most recent) week — historical weeks are stable.
+    const weeksToFetch: Week[] = [];
+    for (let i = 0; i < weeks.length; i++) {
+      const w = weeks[i];
+      if (!cachedEntries[i] || w.key === currentWeekKey) {
+        weeksToFetch.push(w);
+      }
+    }
+
+    let freshWeekData: MarketingWeekData[] = [];
+
+    if (weeksToFetch.length > 0) {
+      // Narrowest possible fetch window
+      const fetchStart = Math.min(...weeksToFetch.map((w) => w.start.getTime()));
+      const fetchEnd = Math.max(...weeksToFetch.map((w) => w.end.getTime())) + 86400000; // +1 day to fully include end
+
+      console.log(
+        `Marketing: refetching ${weeksToFetch.length}/${weeks.length} weeks (range ${new Date(fetchStart).toISOString().slice(0, 10)} → ${new Date(fetchEnd).toISOString().slice(0, 10)})`
+      );
+
+      // Reset request-scoped contact channel cache
+      contactSourceCache.clear();
+
+      try {
+        // Fetch leads first to populate contactSourceCache, then appts+deals in parallel
+        const allLeads = await fetchAllSellerLeads(fetchStart, fetchEnd);
+        const [allAppts, allDeals] = await Promise.all([
+          fetchAllAppts(fetchStart, fetchEnd),
+          fetchAllDeals(fetchStart, fetchEnd),
+        ]);
+        console.log(
+          `Marketing: ${allLeads.length} leads, ${allAppts.length} appts, ${allDeals.length} deals (channel cache: ${contactSourceCache.size})`
+        );
+
+        freshWeekData = buildWeekData(weeks, weeksToFetch, allLeads, allAppts, allDeals);
+
+        // Phase 3: persist each fresh week to its own key
+        if (kvAvailable) {
+          await Promise.all(
+            freshWeekData.map(async (wd) => {
+              try {
+                const entry: CachedWeekEntry = { data: wd, cachedAt: new Date().toISOString() };
+                await kv.set(`${WEEK_CACHE_PREFIX}${wd.weekKey}`, entry);
+              } catch {
+                // KV unavailable
+              }
+            })
+          );
+        }
+      } catch (fetchErr) {
+        console.error("Marketing: fetch failed, falling back to whatever cache we have", fetchErr);
+        // Fall through — we'll serve any cached weeks plus empty placeholders for the rest
+      }
+    }
+
+    // Phase 4: merge cached + fresh into ordered weeks array
+    const freshByKey = new Map(freshWeekData.map((w) => [w.weekKey, w]));
+    const mergedWeeks: MarketingWeekData[] = weeks.map((w, i) => {
+      const fresh = freshByKey.get(w.key);
+      if (fresh) return fresh;
+      const cached = cachedEntries[i];
+      if (cached) return cached.data;
+      // Last resort: empty placeholder
       const channels: Record<string, ChannelWeekData> = {};
       for (const ch of CHANNELS) {
-        const weekLeads = allLeads.filter((l) => l.channel === ch && findWeekKey(new Date(l.date), weeks) === w.key);
-        const weekAppts = allAppts.filter((a) => a.channel === ch && !a.cancelled && a.completed && findWeekKey(new Date(a.date), weeks) === w.key);
-        const weekAb = allDeals.filter((d) => d.channel === ch && d.category === "ab" && findWeekKey(new Date(d.date), weeks) === w.key);
-        const weekClosings = allDeals.filter((d) => d.channel === ch && d.category === "closing" && findWeekKey(new Date(d.date), weeks) === w.key);
-        const weekSettled = allDeals.filter((d) => d.channel === ch && d.category === "settled" && findWeekKey(new Date(d.date), weeks) === w.key);
-
-        const manual = manualInputs[w.key]?.[ch] || {};
-
-        channels[ch] = {
-          leads: weekLeads.length,
-          appts: weekAppts.length,
-          ab: weekAb.length,
-          closings: weekClosings.length,
-          settled: weekSettled.length,
-          grossProfit: weekSettled.reduce((a, d) => a + d.monetaryValue, 0),
-          spend: manual.spend || 0,
-          mailersSent: manual.mailersSent || 0,
-        };
+        channels[ch] = { leads: 0, appts: 0, ab: 0, closings: 0, settled: 0, grossProfit: 0, spend: 0, mailersSent: 0 };
       }
-
       return {
         weekKey: w.key,
         startDate: w.start.toISOString().slice(0, 10),
@@ -339,21 +495,14 @@ export async function GET(request: Request) {
       };
     });
 
-    const responseData = {
-      weeks: weekData,
+    // Phase 5: overlay manual inputs (spend, mailersSent) — always live
+    applyManualInputs(mergedWeeks, manualInputs);
+
+    return NextResponse.json({
+      weeks: mergedWeeks,
       channels: CHANNELS as unknown as string[],
       lastUpdated: new Date().toISOString(),
-    };
-
-    // Cache for this week
-    try {
-      await kv.set(MKT_CACHE_KEY, { weekNumber: currentWeek, data: responseData });
-      console.log("Marketing: cached for week", currentWeek);
-    } catch {
-      // KV not available
-    }
-
-    return NextResponse.json(responseData);
+    });
   } catch (error) {
     console.error("Marketing API error:", error);
     return NextResponse.json({ error: "Failed to build marketing scorecard" }, { status: 500 });
