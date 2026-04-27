@@ -33,12 +33,12 @@ const CHANNEL_COLORS: Record<string, string> = {
 // /direct-mail page's segmentColor() pattern (light-bg + colored text +
 // matching border) so the dashboards feel consistent.
 const CHANNEL_BADGE: Record<string, string> = {
-  TV: "bg-blue-50 text-blue-700 border-blue-200",
-  PPC: "bg-green-50 text-green-700 border-green-200",
-  Mail: "bg-rose-50 text-rose-700 border-rose-200",
-  PPL: "bg-orange-50 text-orange-700 border-orange-200",
+  TV: "bg-blue-100 text-blue-700 border-blue-200",
+  PPC: "bg-emerald-100 text-emerald-700 border-emerald-200",
+  Mail: "bg-rose-100 text-rose-700 border-rose-200",
+  SEO: "bg-amber-100 text-amber-700 border-amber-200",
+  PPL: "bg-purple-100 text-purple-700 border-purple-200",
   Other: "bg-gray-100 text-gray-700 border-gray-200",
-  SEO: "bg-purple-50 text-purple-700 border-purple-200",
 };
 
 const CHANNEL_LABELS: Record<string, string> = {
@@ -233,6 +233,40 @@ export default function MarketingPage() {
     return totals;
   }, [weeks, channels]);
 
+  // YTD totals across ALL channels — drives the wide snapshot card that
+  // mirrors /direct-mail's "YTD 2026 Totals" tile band.
+  const ytdAllTotals = useMemo(() => {
+    let spend = 0,
+      leads = 0,
+      appts = 0,
+      ab = 0,
+      closings = 0,
+      settled = 0,
+      grossProfit = 0;
+    for (const ch of Object.keys(channelTotals)) {
+      const t = channelTotals[ch];
+      spend += t.spend || 0;
+      leads += t.leads || 0;
+      appts += t.appts || 0;
+      ab += t.ab || 0;
+      closings += t.closings || 0;
+      settled += t.settled || 0;
+      grossProfit += t.grossProfit || 0;
+    }
+    return {
+      spend,
+      leads,
+      appts,
+      ab,
+      closings,
+      settled,
+      grossProfit,
+      avgCpl: leads > 0 ? spend / leads : 0,
+      avgCpa: appts > 0 ? spend / appts : 0,
+      avgCpc: closings > 0 ? spend / closings : 0,
+    };
+  }, [channelTotals]);
+
   if (loading) {
     return (
       <div className="flex h-screen items-center justify-center bg-gray-50">
@@ -366,7 +400,7 @@ export default function MarketingPage() {
                 <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-3">
                   YTD Channel Performance
                 </h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
                   {visible.map((ch) => {
                     const t = channelTotals[ch];
                     const badge =
@@ -446,6 +480,90 @@ export default function MarketingPage() {
               </section>
             );
           })()}
+
+          {/* ── YTD Snapshot Wide Card ─────────────────────────────
+              Mirrors /direct-mail's "YTD 2026 Totals" tile band: 8 KPI
+              tiles in a single white card. Sums all channels across
+              the YTD weekly grid. */}
+          <section>
+            <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-3">
+              YTD 2026 Snapshot
+            </h3>
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
+                <div className="bg-gray-50 border border-gray-100 rounded-lg p-3">
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">
+                    Total Spend
+                  </p>
+                  <p className="text-lg font-bold text-gray-900 mt-1">
+                    {fmtMoney0(ytdAllTotals.spend)}
+                  </p>
+                </div>
+                <div className="bg-gray-50 border border-gray-100 rounded-lg p-3">
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">
+                    Total Leads
+                  </p>
+                  <p className="text-lg font-bold text-gray-900 mt-1">
+                    {ytdAllTotals.leads.toLocaleString()}
+                  </p>
+                </div>
+                <div className="bg-gray-50 border border-gray-100 rounded-lg p-3">
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">
+                    Appointments
+                  </p>
+                  <p className="text-lg font-bold text-gray-900 mt-1">
+                    {ytdAllTotals.appts.toLocaleString()}
+                  </p>
+                </div>
+                <div className="bg-gray-50 border border-gray-100 rounded-lg p-3">
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">
+                    Contracts
+                  </p>
+                  <p className="text-lg font-bold text-gray-900 mt-1">
+                    {ytdAllTotals.ab.toLocaleString()}
+                  </p>
+                </div>
+                <div className="bg-gray-50 border border-gray-100 rounded-lg p-3">
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">
+                    Closings
+                  </p>
+                  <p className="text-lg font-bold text-gray-900 mt-1">
+                    {ytdAllTotals.closings.toLocaleString()}
+                  </p>
+                </div>
+                <div className="bg-gray-50 border border-gray-100 rounded-lg p-3">
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">
+                    Avg CPL
+                  </p>
+                  <p className="text-lg font-bold text-gray-900 mt-1">
+                    {ytdAllTotals.avgCpl > 0
+                      ? `$${Math.round(ytdAllTotals.avgCpl).toLocaleString("en-US")}`
+                      : "—"}
+                  </p>
+                </div>
+                <div className="bg-gray-50 border border-gray-100 rounded-lg p-3">
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">
+                    Avg CPA
+                  </p>
+                  <p className="text-lg font-bold text-gray-900 mt-1">
+                    {ytdAllTotals.avgCpa > 0
+                      ? `$${Math.round(ytdAllTotals.avgCpa).toLocaleString("en-US")}`
+                      : "—"}
+                  </p>
+                </div>
+                <div className="bg-gray-50 border border-gray-100 rounded-lg p-3">
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">
+                    Avg CPC
+                  </p>
+                  <p className="text-lg font-bold text-gray-900 mt-1">
+                    {ytdAllTotals.avgCpc > 0
+                      ? `$${Math.round(ytdAllTotals.avgCpc).toLocaleString("en-US")}`
+                      : "—"}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </section>
 
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
             <div className="overflow-x-auto">
