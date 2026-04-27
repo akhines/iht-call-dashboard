@@ -3,7 +3,10 @@ import { kv } from "@vercel/kv";
 import { buildFreshMarketing, FRESH_KEY } from "../builder";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+// Bumped from 60 → 300 because the rebuilt fetchAllDeals now paginates the
+// TC + Mike + Josh + Deals pipelines AND fetches per-deal detail for every
+// settled-stage candidate. On full-year data that easily breaks 60s.
+export const maxDuration = 300;
 
 // GET-only refresh endpoint. Vercel Cron only does GET, so the weekly cron
 // hits this. The dashboard "Refresh now" button also calls this with
