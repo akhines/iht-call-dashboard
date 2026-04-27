@@ -623,37 +623,64 @@ async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
   }
 
   // Settled (merge of dealsClosedDeal + tcClosedDispo, deduped above)
+  // Prefilter by lastStageChangeAt to avoid fetching detail on hundreds of
+  // pre-2026 closings — a 2026 closing date can't predate the stage change
+  // by more than ~2 months. Cutoff: 2025-11-01.
   const CLOSING_DATE_FIELD = "bbDP5pNJ96IMth9bQfh8";
-  for (const o of closedDeals) {
-    const detailRes = await fetch(`${BASE}/opportunities/${o.id}`, {
-      headers: getHeaders(),
-    });
-    if (!detailRes.ok) continue;
-    const detail = await detailRes.json();
-    const opp = detail.opportunity || detail;
-    const cfs: Record<string, string> = {};
-    for (const cf of opp.customFields || []) {
-      cfs[cf.id] = cf.fieldValue || cf.fieldValueString || "";
-    }
-    const closingDate = cfs[CLOSING_DATE_FIELD];
-    if (!closingDate || closingDate < "2026") continue;
+  const STAGE_CHANGE_CUTOFF = new Date("2025-11-01T00:00:00Z").getTime();
+  const candidates = closedDeals.filter((o) => {
+    const t = o.lastStageChangeAt ? new Date(o.lastStageChangeAt).getTime() : 0;
+    return !t || t >= STAGE_CHANGE_CUTOFF;
+  });
+  console.log(
+    `[Scorecard] Settled prefilter: ${closedDeals.length} closed → ${candidates.length} candidates after stage-change cutoff`
+  );
 
-    const d = new Date(closingDate).getTime();
-    if (d < JAN1_2026) continue;
-    const src = o.contactId ? await getContactSource(o.contactId) : o.source;
-    // Prefer assignedTo from detail (more authoritative) but fall back to search result.
-    const closer = resolveCloser({
-      contactId: o.contactId,
-      assignedTo: opp.assignedTo || o.assignedTo || "",
-    });
-    opps.push({
-      date: d,
-      category: "settled",
-      closer,
-      name: o.name,
-      source: src,
-      monetaryValue: opp.monetaryValue || 0,
-    });
+  // Batch detail fetches in parallel (10 at a time).
+  const BATCH = 10;
+  for (let i = 0; i < candidates.length; i += BATCH) {
+    const slice = candidates.slice(i, i + BATCH);
+    const details = await Promise.all(
+      slice.map(async (o) => {
+        try {
+          const r = await fetch(`${BASE}/opportunities/${o.id}`, {
+            headers: getHeaders(),
+          });
+          if (!r.ok) return null;
+          return await r.json();
+        } catch {
+          return null;
+        }
+      })
+    );
+    for (let j = 0; j < slice.length; j++) {
+      const o = slice[j];
+      const detail = details[j];
+      if (!detail) continue;
+      const opp = detail.opportunity || detail;
+      const cfs: Record<string, string> = {};
+      for (const cf of opp.customFields || []) {
+        cfs[cf.id] = cf.fieldValue || cf.fieldValueString || "";
+      }
+      const closingDate = cfs[CLOSING_DATE_FIELD];
+      if (!closingDate || closingDate < "2026") continue;
+
+      const d = new Date(closingDate).getTime();
+      if (d < JAN1_2026) continue;
+      const src = o.contactId ? await getContactSource(o.contactId) : o.source;
+      const closer = resolveCloser({
+        contactId: o.contactId,
+        assignedTo: opp.assignedTo || o.assignedTo || "",
+      });
+      opps.push({
+        date: d,
+        category: "settled",
+        closer,
+        name: o.name,
+        source: src,
+        monetaryValue: opp.monetaryValue || 0,
+      });
+    }
   }
 
   return opps;
