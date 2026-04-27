@@ -810,7 +810,10 @@ export async function buildFreshScorecard(): Promise<ScorecardData> {
     const totalInbound = weekCalls.filter((c) => c.direction === "inbound").length;
     const totalCallCount = dials + totalInbound;
     const connects = weekCalls.filter((c) => c.connected).length;
-    const missedCalls = totalCallCount - connects;
+    // Missed = inbound calls we didn't pick up (unanswered outbound dials are NOT misses).
+    const missedCalls = weekCalls.filter(
+      (c) => c.direction === "inbound" && !c.connected
+    ).length;
     const connectedCalls = weekCalls.filter((c) => c.connected);
     const totalDuration = connectedCalls.reduce((a, c) => a + c.duration, 0);
     const avgCallDuration =
