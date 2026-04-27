@@ -37,9 +37,11 @@ const STAGES = {
   dealsClosedDeal: "245bc5b3-e2ac-4886-8928-907560ec3f15",
 };
 
-// Stages that count as a SELLER-side A-B contract being signed in each closer's own pipeline
-const MIKE_AB_SIGNED_STAGES = new Set<string>([STAGES.mikeYardLine]);
-const JOSH_AB_SIGNED_STAGES = new Set<string>([STAGES.joshYardLine, STAGES.joshLtfu, STAGES.joshWon]);
+// Stages that count as a SELLER-side A-B contract being signed in each closer's own pipeline.
+// EMPTY for now — pending Ashley's confirmation of which stages map to "signed".
+// Adding the wrong ones overcounts (LTFU = bench, 1 YD LINE = near-close, not signed).
+const MIKE_AB_SIGNED_STAGES = new Set<string>([]);
+const JOSH_AB_SIGNED_STAGES = new Set<string>([]);
 
 const CONTACT_TYPE_FIELD = "IfkLFRqVzW9XrCkXvPUQ";
 const MARKETING_CAMPAIGN_FIELD = "4fOhwf1m5nhK1c9vI6SJ";
