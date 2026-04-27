@@ -29,6 +29,18 @@ const CHANNEL_COLORS: Record<string, string> = {
   SEO: "bg-purple-500",
 };
 
+// Pill / badge color tokens for the YTD cost-per tiles. Match the
+// /direct-mail page's segmentColor() pattern (light-bg + colored text +
+// matching border) so the dashboards feel consistent.
+const CHANNEL_BADGE: Record<string, string> = {
+  TV: "bg-blue-50 text-blue-700 border-blue-200",
+  PPC: "bg-green-50 text-green-700 border-green-200",
+  Mail: "bg-rose-50 text-rose-700 border-rose-200",
+  PPL: "bg-orange-50 text-orange-700 border-orange-200",
+  Other: "bg-gray-100 text-gray-700 border-gray-200",
+  SEO: "bg-purple-50 text-purple-700 border-purple-200",
+};
+
 const CHANNEL_LABELS: Record<string, string> = {
   TV: "TV",
   PPC: "PPC (Google Ads)",
@@ -54,6 +66,21 @@ function fmtDate(iso: string) {
 }
 
 function fmtMoney(v: number) { const n = Math.max(0, v); return n ? `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "$0.00"; }
+
+// Whole-dollar money for the YTD cost-per tiles (mirrors /direct-mail's
+// fmtMoney0). Returns "—" for non-finite or non-positive values so empty
+// channels render as a dash instead of "$0".
+function fmtMoney0(v: number) {
+  if (!isFinite(v) || v <= 0) return "$0";
+  return `$${Math.round(v).toLocaleString("en-US")}`;
+}
+
+function fmtCostPer(spend: number, count: number): string {
+  if (!spend || !count) return "—";
+  const v = spend / count;
+  if (!isFinite(v) || v <= 0) return "—";
+  return `$${Math.round(v).toLocaleString("en-US")}`;
+}
 
 const RefreshIcon = () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>;
 
@@ -320,7 +347,106 @@ export default function MarketingPage() {
           </div>
         </header>
 
-        <div className="p-6">
+        <div className="p-4 sm:p-6 space-y-6">
+          {/* ── YTD Channel Cost Cards ──────────────────────────
+              Source: spend pulled from '2026 Marketing Scorecard'
+              cols I/O/U via bcdi-api → Vercel KV → /api/marketing.
+              Shows tiles only for channels with non-zero YTD spend
+              (or non-zero leads, so SEO/Other still surface). */}
+          {(() => {
+            const TILE_ORDER = ["TV", "PPC", "Mail", "Other", "SEO", "PPL"];
+            const visible = TILE_ORDER.filter((ch) => {
+              const t = channelTotals[ch];
+              if (!t) return false;
+              return (t.spend || 0) > 0 || (t.leads || 0) > 0;
+            });
+            if (visible.length === 0) return null;
+            return (
+              <section>
+                <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-3">
+                  YTD Channel Performance
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                  {visible.map((ch) => {
+                    const t = channelTotals[ch];
+                    const badge =
+                      CHANNEL_BADGE[ch] ||
+                      "bg-gray-100 text-gray-700 border-gray-200";
+                    return (
+                      <div
+                        key={`tile-${ch}`}
+                        className="bg-white rounded-xl shadow-sm border border-gray-100 p-4"
+                      >
+                        <div className="flex items-center justify-between mb-3">
+                          <span
+                            className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${badge}`}
+                          >
+                            {CHANNEL_LABELS[ch] || ch}
+                          </span>
+                          <span className="text-xs text-gray-400">YTD</span>
+                        </div>
+                        <div className="flex items-baseline gap-1 mb-3">
+                          <span className="text-2xl font-bold text-gray-900">
+                            {fmtMoney0(t.spend)}
+                          </span>
+                          <span className="text-sm text-gray-400">spend</span>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 mb-3 text-center border-t border-gray-100 pt-3">
+                          <div>
+                            <p className="text-[10px] text-gray-400 uppercase tracking-wider">
+                              Leads
+                            </p>
+                            <p className="text-sm font-semibold text-gray-900">
+                              {t.leads.toLocaleString()}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-[10px] text-gray-400 uppercase tracking-wider">
+                              Appts
+                            </p>
+                            <p className="text-sm font-semibold text-gray-900">
+                              {t.appts.toLocaleString()}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-[10px] text-gray-400 uppercase tracking-wider">
+                              Closings
+                            </p>
+                            <p className="text-sm font-semibold text-gray-900">
+                              {t.closings.toLocaleString()}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="space-y-1.5 border-t border-gray-100 pt-3">
+                          <div className="flex justify-between text-xs">
+                            <span className="text-gray-500">Cost / Lead</span>
+                            <span className="font-semibold text-gray-900">
+                              {fmtCostPer(t.spend, t.leads)}
+                            </span>
+                          </div>
+                          <div className="flex justify-between text-xs">
+                            <span className="text-gray-500">Cost / Appt</span>
+                            <span className="font-semibold text-gray-900">
+                              {fmtCostPer(t.spend, t.appts)}
+                            </span>
+                          </div>
+                          <div className="flex justify-between text-xs">
+                            <span className="text-gray-500">
+                              Cost / Closing
+                            </span>
+                            <span className="font-semibold text-gray-900">
+                              {fmtCostPer(t.spend, t.closings)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            );
+          })()}
+
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
             <div className="overflow-x-auto">
               <table className="text-xs border-collapse w-full">

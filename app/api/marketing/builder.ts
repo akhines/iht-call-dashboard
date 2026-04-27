@@ -2,6 +2,53 @@ export const FRESH_KEY = "marketing_cache_v3";
 export const MANUAL_INPUTS_KEY = "marketing_inputs";
 
 const BASE = "https://services.leadconnectorhq.com";
+const BCDI_BASE = "https://bcdi-api.fly.dev";
+
+interface SheetSpendRow {
+  startDate: string;
+  endDate: string;
+  tvSpend: number;
+  ppcSpend: number;
+  mailSpend: number;
+}
+
+// Per-week spend pulled from the canonical Google Sheet
+// ('2026 Marketing Scorecard' cols I/O/U) via bcdi-api. Source of truth
+// for TV / PPC / Mail spend — replaces the empty Vercel KV manual_inputs
+// map. Map is keyed by YYYY-MM-DD start date so it can match the
+// `weekKey` we derive locally.
+async function fetchWeeklySpend(): Promise<Map<string, SheetSpendRow>> {
+  const map = new Map<string, SheetSpendRow>();
+  try {
+    const res = await fetch(`${BCDI_BASE}/api/marketing/weekly-spend`, {
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      console.warn(
+        `Marketing: weekly-spend fetch failed ${res.status}; falling back to manual_inputs only`
+      );
+      return map;
+    }
+    const data = await res.json();
+    for (const w of data.weeks || []) {
+      if (!w.startDate) continue;
+      map.set(w.startDate, {
+        startDate: w.startDate,
+        endDate: w.endDate,
+        tvSpend: Number(w.tvSpend) || 0,
+        ppcSpend: Number(w.ppcSpend) || 0,
+        mailSpend: Number(w.mailSpend) || 0,
+      });
+    }
+    console.log(`Marketing: pulled spend for ${map.size} weeks from sheet`);
+  } catch (err) {
+    console.warn(
+      "Marketing: weekly-spend fetch errored, falling back to manual_inputs only:",
+      err
+    );
+  }
+  return map;
+}
 
 function getHeaders() {
   return {
@@ -378,14 +425,70 @@ export function applyManualInputs(
     const channels: Record<string, ChannelWeekData> = { ...w.channels };
     for (const ch of CHANNELS) {
       const manual = manualInputs?.[w.weekKey]?.[ch];
-      if (manual) {
-        channels[ch] = {
-          ...channels[ch],
-          spend: manual.spend || 0,
-          mailersSent: manual.mailersSent || 0,
-        };
-      }
+      if (!manual) continue;
+      // Sheet-driven spend (TV / PPC / Mail) is the source of truth — only
+      // let manual_inputs override when the user typed a positive value.
+      // mailersSent isn't on the sheet, so it always honors the manual map.
+      const sheetDriven = ch === "TV" || ch === "PPC" || ch === "Mail";
+      const manualSpend = manual.spend || 0;
+      const nextSpend =
+        sheetDriven && manualSpend === 0
+          ? channels[ch].spend
+          : manualSpend;
+      channels[ch] = {
+        ...channels[ch],
+        spend: nextSpend,
+        mailersSent: manual.mailersSent || 0,
+      };
     }
+    return { ...w, channels };
+  });
+}
+
+/**
+ * Merge per-week TV / PPC / Mail spend from the canonical Google Sheet
+ * into the channel data. This is the source of truth for spend — the
+ * KV manual_inputs map is no longer authoritative for these three
+ * channels (it stays alive only for `mailersSent`, which doesn't live
+ * in the sheet).
+ *
+ * Match strategy: each builder week has a `weekKey` of the form
+ * YYYY-MM-DD (week-start). The sheet endpoint also keys by start date,
+ * so an exact match is preferred. If the sheet's start date is off by
+ * one day (sheet weeks run Mon→Sun while builder weeks run Mon→Sun
+ * starting 2026-01-05; the sheet starts 2026-01-05 too) we also fall
+ * back to a ±3-day window to be tolerant of any drift.
+ */
+function applySheetSpend(
+  weekData: MarketingWeekData[],
+  sheetMap: Map<string, SheetSpendRow>
+): MarketingWeekData[] {
+  if (sheetMap.size === 0) return weekData;
+  const sheetEntries = Array.from(sheetMap.values());
+  return weekData.map((w) => {
+    let row = sheetMap.get(w.weekKey);
+    if (!row) {
+      // Fall back to nearest start date within ±3 days
+      const target = new Date(w.weekKey + "T00:00:00Z").getTime();
+      let best: SheetSpendRow | undefined;
+      let bestDelta = Infinity;
+      for (const s of sheetEntries) {
+        const t = new Date(s.startDate + "T00:00:00Z").getTime();
+        const delta = Math.abs(t - target);
+        if (delta < bestDelta && delta <= 3 * 86400000) {
+          best = s;
+          bestDelta = delta;
+        }
+      }
+      row = best;
+    }
+    if (!row) return w;
+    const channels: Record<string, ChannelWeekData> = { ...w.channels };
+    if (channels.TV) channels.TV = { ...channels.TV, spend: row.tvSpend || 0 };
+    if (channels.PPC)
+      channels.PPC = { ...channels.PPC, spend: row.ppcSpend || 0 };
+    if (channels.Mail)
+      channels.Mail = { ...channels.Mail, spend: row.mailSpend || 0 };
     return { ...w, channels };
   });
 }
@@ -395,17 +498,20 @@ export async function buildFreshMarketing(): Promise<MarketingData> {
 
   contactSourceCache.clear();
 
-  // Fetch leads first to populate channel cache, then appts+deals in parallel
+  // Fetch leads first to populate channel cache, then appts+deals+spend
+  // in parallel.
   const allLeads = await fetchAllSellerLeads();
-  const [allAppts, allDeals] = await Promise.all([
+  const [allAppts, allDeals, sheetSpend] = await Promise.all([
     fetchAllAppts(),
     fetchAllDeals(),
+    fetchWeeklySpend(),
   ]);
   console.log(
-    `Marketing: ${allLeads.length} leads, ${allAppts.length} appts, ${allDeals.length} deals (channel cache: ${contactSourceCache.size})`
+    `Marketing: ${allLeads.length} leads, ${allAppts.length} appts, ${allDeals.length} deals, ${sheetSpend.size} spend rows (channel cache: ${contactSourceCache.size})`
   );
 
-  const weekData = buildWeekData(weeks, allLeads, allAppts, allDeals);
+  const baseWeekData = buildWeekData(weeks, allLeads, allAppts, allDeals);
+  const weekData = applySheetSpend(baseWeekData, sheetSpend);
 
   return {
     weeks: weekData,
