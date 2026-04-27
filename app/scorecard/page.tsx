@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
-  ResponsiveContainer, PieChart, Pie, Cell,
+  ResponsiveContainer,
 } from "recharts";
 
 // Client-side cache to prevent re-fetch on every tab switch
@@ -291,26 +291,9 @@ export default function ScorecardPage() {
     Settled: w.settled,
   })), [weeks]);
 
-  // Aggregate source breakdowns across all weeks for pie charts
-  const PIE_COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#06b6d4", "#84cc16"];
-
-  const apptsByChannelPie = useMemo(() => {
-    const totals: Record<string, number> = {};
-    weeks.forEach((w) => { Object.entries(w.apptsBySource || {}).forEach(([s, n]) => { totals[s] = (totals[s] || 0) + n; }); });
-    return Object.entries(totals).filter(([, v]) => v > 0).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
-  }, [weeks]);
-
-  const abByChannelPie = useMemo(() => {
-    const totals: Record<string, number> = {};
-    weeks.forEach((w) => { Object.entries(w.abBySource || {}).forEach(([s, n]) => { totals[s] = (totals[s] || 0) + n; }); });
-    return Object.entries(totals).filter(([, v]) => v > 0).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
-  }, [weeks]);
-
-  const leadsByChannelPie = useMemo(() => {
-    const totals: Record<string, number> = {};
-    weeks.forEach((w) => { Object.entries(w.leadsBySource || {}).forEach(([s, n]) => { totals[s] = (totals[s] || 0) + n; }); });
-    return Object.entries(totals).filter(([, v]) => v > 0).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
-  }, [weeks]);
+  // Channel breakdowns (Leads/Appts/A-B by Channel) used to render here as
+  // donut charts. Moved to /marketing as a horizontal "Channel Comparison"
+  // table to fix label-collision illegibility on the scorecard.
 
   if (loading) {
     return (
@@ -531,31 +514,6 @@ export default function ScorecardPage() {
             </ResponsiveContainer>
           </div>
 
-          {/* Pie Charts - Channel Breakdowns */}
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-            {[
-              { title: "Leads by Channel", data: leadsByChannelPie },
-              { title: "Appointments by Channel", data: apptsByChannelPie },
-              { title: "A-B Signed by Channel", data: abByChannelPie },
-            ].map(({ title, data: pieData }) => (
-              <div key={title} className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
-                <h3 className="text-sm font-semibold text-gray-700 mb-4">{title}</h3>
-                {pieData.length > 0 ? (
-                  <ResponsiveContainer width="100%" height={250}>
-                    <PieChart>
-                      <Pie data={pieData} cx="50%" cy="50%" innerRadius={45} outerRadius={80} dataKey="value" paddingAngle={3}
-                        label={(props: { name?: string; percent?: number }) => `${props.name || ""} ${((props.percent || 0) * 100).toFixed(0)}%`}>
-                        {pieData.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
-                      </Pie>
-                      <Tooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} />
-                    </PieChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <p className="text-gray-400 text-sm text-center py-10">No data yet</p>
-                )}
-              </div>
-            ))}
-          </div>
         </div>
       </main>
       {drilldown && <DrilldownModal title={drilldown.title} data={drilldown.data} onClose={() => setDrilldown(null)} />}

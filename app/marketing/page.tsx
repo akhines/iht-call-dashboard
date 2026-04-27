@@ -29,6 +29,22 @@ const CHANNEL_COLORS: Record<string, string> = {
   SEO: "bg-purple-500",
 };
 
+// Channels surfaced on the dashboard. Unknown / Other / PPL are noise and
+// hidden everywhere except in the YTD top-line totals (which keep summing
+// across all channels for accuracy). Use this everywhere a channel list is
+// rendered: cost cards, comparison table, weekly grid columns.
+const VISIBLE_CHANNELS = ["TV", "PPC", "Mail", "SEO"] as const;
+type VisibleChannel = typeof VISIBLE_CHANNELS[number];
+
+// Solid hex colors mirroring CHANNEL_COLORS — used for the inline horizontal
+// bar fills in the Channel Comparison table.
+const CHANNEL_BAR_FILL: Record<VisibleChannel, string> = {
+  TV: "#eab308",     // yellow-500
+  PPC: "#3b82f6",    // blue-500
+  Mail: "#16a34a",   // green-600
+  SEO: "#a855f7",    // purple-500
+};
+
 // Pill / badge color tokens for the YTD cost-per tiles. Match the
 // /direct-mail page's segmentColor() pattern (light-bg + colored text +
 // matching border) so the dashboards feel consistent.
@@ -577,27 +593,42 @@ export default function MarketingPage() {
           {/* ── YTD Channel Cost Cards ──────────────────────────
               Source: spend pulled from '2026 Marketing Scorecard'
               cols I/O/U via bcdi-api → Vercel KV → /api/marketing.
-              Shows tiles only for channels with non-zero YTD spend
-              (or non-zero leads, so SEO/Other still surface). */}
+              Filtered to VISIBLE_CHANNELS only (TV/PPC/Mail/SEO) — the
+              Unknown/Other/PPL noise channels are hidden from per-channel
+              displays. ROI is the headline metric (big colored number). */}
           {(() => {
-            const TILE_ORDER = ["TV", "PPC", "Mail", "Other", "SEO", "PPL"];
-            const visible = TILE_ORDER.filter((ch) => {
-              const t = channelTotals[ch];
-              if (!t) return false;
-              return (t.spend || 0) > 0 || (t.leads || 0) > 0;
-            });
+            const visible = (VISIBLE_CHANNELS as readonly string[]).filter(
+              (ch) => {
+                const t = channelTotals[ch];
+                if (!t) return false;
+                return (t.spend || 0) > 0 || (t.leads || 0) > 0;
+              },
+            );
             if (visible.length === 0) return null;
             return (
               <section>
                 <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-3">
                   YTD Channel Performance
                 </h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                   {visible.map((ch) => {
                     const t = channelTotals[ch];
                     const badge =
                       CHANNEL_BADGE[ch] ||
                       "bg-gray-100 text-gray-700 border-gray-200";
+                    const hasSpend = (t.spend || 0) > 0;
+                    const roi = hasSpend
+                      ? Math.round(
+                          ((t.grossProfit - t.spend) / t.spend) * 100,
+                        )
+                      : 0;
+                    const roiColor = !hasSpend
+                      ? "text-gray-900"
+                      : roi > 0
+                        ? "text-emerald-600"
+                        : roi < 0
+                          ? "text-rose-600"
+                          : "text-gray-900";
                     return (
                       <div
                         key={`tile-${ch}`}
@@ -643,7 +674,23 @@ export default function MarketingPage() {
                             </p>
                           </div>
                         </div>
-                        <div className="space-y-1.5 border-t border-gray-100 pt-3">
+                        {/* Big ROI headline — colored green/red so the user
+                            sees profitability at a glance. */}
+                        <div className="border-t border-gray-100 pt-3 mb-2">
+                          <div className="flex items-baseline justify-between">
+                            <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">
+                              ROI
+                            </p>
+                            <p
+                              className={`text-2xl font-extrabold leading-none ${roiColor}`}
+                            >
+                              {hasSpend
+                                ? `${roi > 0 ? "+" : ""}${roi.toLocaleString("en-US")}%`
+                                : "—"}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="space-y-1.5 border-t border-gray-100 pt-2">
                           <div className="flex justify-between text-xs">
                             <span className="text-gray-500">Cost / Lead</span>
                             <span className="font-semibold text-gray-900">
@@ -664,7 +711,6 @@ export default function MarketingPage() {
                               {fmtCostPer(t.spend, t.closings)}
                             </span>
                           </div>
-                          {/* Extended footer rows: Gross Profit / CAC / ROI */}
                           <div className="flex justify-between text-xs">
                             <span className="text-gray-500">Gross Profit</span>
                             <span className="font-semibold text-gray-900">
@@ -677,38 +723,118 @@ export default function MarketingPage() {
                               {fmtCostPer(t.spend, t.closings)}
                             </span>
                           </div>
-                          {(() => {
-                            const hasSpend = (t.spend || 0) > 0;
-                            const roi = hasSpend
-                              ? Math.round(
-                                  ((t.grossProfit - t.spend) / t.spend) * 100,
-                                )
-                              : 0;
-                            return (
-                              <div className="flex justify-between text-xs">
-                                <span className="text-gray-500">ROI</span>
-                                <span
-                                  className={`font-semibold ${
-                                    !hasSpend
-                                      ? "text-gray-900"
-                                      : roi > 0
-                                        ? "text-emerald-600"
-                                        : roi < 0
-                                          ? "text-rose-600"
-                                          : "text-gray-900"
-                                  }`}
-                                >
-                                  {hasSpend
-                                    ? `${roi.toLocaleString("en-US")}%`
-                                    : "—"}
-                                </span>
-                              </div>
-                            );
-                          })()}
                         </div>
                       </div>
                     );
                   })}
+                </div>
+              </section>
+            );
+          })()}
+
+          {/* ── Channel Comparison Table ────────────────────────────
+              Replacement for the donuts that used to live on /scorecard.
+              Horizontal-bar style — one row per VISIBLE_CHANNEL, four
+              metric columns (Leads / Appts / A-B / Closings). Bar widths
+              are scaled to the column max so the eye reads relative
+              performance immediately. */}
+          {(() => {
+            const visible = (VISIBLE_CHANNELS as readonly string[]).filter(
+              (ch) => channelTotals[ch],
+            );
+            if (visible.length === 0) return null;
+
+            const maxOf = (key: "leads" | "appts" | "ab" | "closings") =>
+              Math.max(
+                1,
+                ...visible.map((c) => channelTotals[c]?.[key] || 0),
+              );
+            const maxes = {
+              leads: maxOf("leads"),
+              appts: maxOf("appts"),
+              ab: maxOf("ab"),
+              closings: maxOf("closings"),
+            };
+
+            const renderBar = (
+              ch: string,
+              key: "leads" | "appts" | "ab" | "closings",
+            ) => {
+              const v = channelTotals[ch]?.[key] || 0;
+              const pct = Math.round((v / maxes[key]) * 100);
+              const fill =
+                CHANNEL_BAR_FILL[ch as VisibleChannel] || "#9ca3af";
+              return (
+                <div className="flex items-center gap-2 min-w-[140px]">
+                  <div className="flex-1 h-3 bg-gray-100 rounded-full overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all"
+                      style={{ width: `${pct}%`, backgroundColor: fill }}
+                    />
+                  </div>
+                  <span className="text-xs font-semibold text-gray-900 w-8 text-right tabular-nums">
+                    {v.toLocaleString()}
+                  </span>
+                </div>
+              );
+            };
+
+            return (
+              <section>
+                <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-1">
+                  Channel Comparison
+                </h3>
+                <p className="text-xs text-gray-500 mb-3">
+                  YTD volume per channel — bar widths are relative to the
+                  column max so you can read winners at a glance.
+                </p>
+                <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="bg-gray-50 border-b border-gray-100">
+                          <th className="px-4 py-2.5 text-left font-semibold text-gray-600 uppercase tracking-wider text-[11px]">
+                            Channel
+                          </th>
+                          <th className="px-4 py-2.5 text-left font-semibold text-gray-600 uppercase tracking-wider text-[11px]">
+                            Leads
+                          </th>
+                          <th className="px-4 py-2.5 text-left font-semibold text-gray-600 uppercase tracking-wider text-[11px]">
+                            Appts
+                          </th>
+                          <th className="px-4 py-2.5 text-left font-semibold text-gray-600 uppercase tracking-wider text-[11px]">
+                            A-B Signed
+                          </th>
+                          <th className="px-4 py-2.5 text-left font-semibold text-gray-600 uppercase tracking-wider text-[11px]">
+                            Closings
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {visible.map((ch) => (
+                          <tr
+                            key={`cmp-${ch}`}
+                            className="border-b border-gray-50 hover:bg-gray-50/50"
+                          >
+                            <td className="px-4 py-3 whitespace-nowrap">
+                              <span
+                                className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${
+                                  CHANNEL_BADGE[ch] ||
+                                  "bg-gray-100 text-gray-700 border-gray-200"
+                                }`}
+                              >
+                                {CHANNEL_LABELS[ch] || ch}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3">{renderBar(ch, "leads")}</td>
+                            <td className="px-4 py-3">{renderBar(ch, "appts")}</td>
+                            <td className="px-4 py-3">{renderBar(ch, "ab")}</td>
+                            <td className="px-4 py-3">{renderBar(ch, "closings")}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               </section>
             );
@@ -798,6 +924,15 @@ export default function MarketingPage() {
             </div>
           </section>
 
+          {/* Weekly grid — restricted to VISIBLE_CHANNELS so the noisy
+              Unknown / Other / PPL columns no longer crowd the table. The
+              full set still drives top-line totals (ytdAllTotals) for
+              accuracy. */}
+          {(() => {
+            const visibleChannels = (VISIBLE_CHANNELS as readonly string[]).filter(
+              (ch) => channels.includes(ch),
+            );
+            return (
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
             <div className="overflow-x-auto">
               <table className="text-xs border-collapse w-full">
@@ -805,7 +940,7 @@ export default function MarketingPage() {
                   {/* Channel group headers */}
                   <tr>
                     <th className="bg-gray-700 text-white px-3 py-2 text-xs font-semibold sticky left-0 z-10" rowSpan={2}>Week</th>
-                    {channels.map((ch) => {
+                    {visibleChannels.map((ch) => {
                       const metricsForChannel = METRICS;
                       return (
                         <th key={ch} colSpan={metricsForChannel.length}
@@ -817,7 +952,7 @@ export default function MarketingPage() {
                   </tr>
                   {/* Metric sub-headers */}
                   <tr className="bg-gray-50">
-                    {channels.map((ch) =>
+                    {visibleChannels.map((ch) =>
                       METRICS.map((m) => (
                         <th key={`${ch}-${m.key}`} className="px-2 py-1.5 font-medium text-gray-500 text-[10px] whitespace-nowrap border-r border-gray-100 text-center">
                           {m.label}
@@ -832,7 +967,7 @@ export default function MarketingPage() {
                       <td className="px-3 py-2 whitespace-nowrap text-gray-700 font-medium sticky left-0 bg-white z-[5] border-r border-gray-100">
                         {fmtDate(week.startDate)} - {fmtDate(week.endDate)}
                       </td>
-                      {channels.map((ch) =>
+                      {visibleChannels.map((ch) =>
                         METRICS.map((m) => (
                           <td key={`${week.weekKey}-${ch}-${m.key}`}
                             className={`px-2 py-1.5 text-center whitespace-nowrap border-r border-gray-50 ${m.editable ? "bg-yellow-50/50" : ""}`}>
@@ -846,7 +981,7 @@ export default function MarketingPage() {
                   {/* Totals row */}
                   <tr className="bg-emerald-50 border-t-2 border-emerald-300 font-bold">
                     <td className="px-3 py-2 text-emerald-900 sticky left-0 bg-emerald-50 z-[5] border-r border-emerald-100">2026 Total</td>
-                    {channels.map((ch) =>
+                    {visibleChannels.map((ch) =>
                       METRICS.map((m) => {
                         const t = channelTotals[ch];
                         if (!t) return <td key={`tot-${ch}-${m.key}`} className="px-2 py-1.5 text-center border-r border-emerald-100">0</td>;
@@ -863,7 +998,7 @@ export default function MarketingPage() {
                   {/* ROI row */}
                   <tr className="bg-blue-50 border-t border-blue-200 font-bold">
                     <td className="px-3 py-2 text-blue-900 sticky left-0 bg-blue-50 z-[5] border-r border-blue-100">ROI</td>
-                    {channels.map((ch) =>
+                    {visibleChannels.map((ch) =>
                       METRICS.map((m, idx) => {
                         const t = channelTotals[ch];
                         if (idx === 0 && t) {
@@ -882,6 +1017,8 @@ export default function MarketingPage() {
               </table>
             </div>
           </div>
+            );
+          })()}
         </div>
       </main>
     </div>

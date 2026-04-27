@@ -235,45 +235,75 @@ async function fetchAllAppts(): Promise<ApptRecord[]> {
   return appts;
 }
 
-async function fetchAllDeals(): Promise<DealRecord[]> {
-  const deals: DealRecord[] = [];
+// Paginated opportunity search — mirrors scorecard/builder.ts' `fetchOppsByStage`
+// pattern (data.meta.nextPageUrl loop, hard cap at 25 pages). The marketing
+// builder previously stopped at the first 100 results, which silently dropped
+// settled deals once we crossed that threshold (3 missing settled in YTD 2026).
+interface RawOpp {
+  id: string;
+  contactId?: string;
+  source?: string;
+  pipelineStageId?: string;
+  lastStageChangeAt?: string;
+  createdAt?: string;
+  monetaryValue?: number;
+}
 
-  // A-B signed
-  const tcRes = await fetch(
-    `${BASE}/opportunities/search?location_id=${LOCATION_ID()}&pipeline_id=${TC_PIPELINE}&limit=100`,
-    { headers: getHeaders() }
-  );
-  if (tcRes.ok) {
-    const tcData = await tcRes.json();
-    for (const o of tcData.opportunities || []) {
-      const d = new Date(o.createdAt).getTime();
-      if (d < JAN1_2026) continue;
-      const channel = o.contactId
-        ? getContactChannelCached(o.contactId)
-        : getChannel(o.source || "", "");
-      deals.push({
-        date: d,
-        channel,
-        category: "ab",
+async function fetchAllOppsPaginated(
+  pipelineId: string,
+  stageId?: string
+): Promise<RawOpp[]> {
+  const results: RawOpp[] = [];
+  const stageQs = stageId ? `&pipeline_stage_id=${stageId}` : "";
+  let url: string | null = `${BASE}/opportunities/search?location_id=${LOCATION_ID()}&pipeline_id=${pipelineId}${stageQs}&limit=100`;
+  for (let page = 0; page < 25 && url; page++) {
+    const res: Response = await fetch(url, { headers: getHeaders() });
+    if (!res.ok) break;
+    const data = await res.json();
+    for (const o of data.opportunities || []) {
+      results.push({
+        id: o.id,
+        contactId: o.contactId || "",
+        source: o.source || "",
+        pipelineStageId: o.pipelineStageId || "",
+        lastStageChangeAt: o.lastStageChangeAt,
+        createdAt: o.createdAt,
         monetaryValue: o.monetaryValue || 0,
       });
     }
+    url = data?.meta?.nextPageUrl || null;
+  }
+  return results;
+}
+
+async function fetchAllDeals(): Promise<DealRecord[]> {
+  const deals: DealRecord[] = [];
+
+  // A-B signed (paginated)
+  const tcOpps = await fetchAllOppsPaginated(TC_PIPELINE);
+  for (const o of tcOpps) {
+    const d = new Date(o.createdAt || 0).getTime();
+    if (d < JAN1_2026) continue;
+    const channel = o.contactId
+      ? getContactChannelCached(o.contactId)
+      : getChannel(o.source || "", "");
+    deals.push({
+      date: d,
+      channel,
+      category: "ab",
+      monetaryValue: o.monetaryValue || 0,
+    });
   }
 
-  // Closings from Mike/Josh closer pipelines
+  // Closings from Mike/Josh closer pipelines (paginated)
   const closerStages = [
     { pipeline: MIKE_PIPELINE, stage: "64d1fa71-6952-41cd-be5e-1536715b6d87" },
     { pipeline: JOSH_PIPELINE, stage: "0c4afc64-8163-4723-9f78-d4a0d7e1d037" },
   ];
   for (const q of closerStages) {
-    const res = await fetch(
-      `${BASE}/opportunities/search?location_id=${LOCATION_ID()}&pipeline_id=${q.pipeline}&pipeline_stage_id=${q.stage}&limit=100`,
-      { headers: getHeaders() }
-    );
-    if (!res.ok) continue;
-    const data = await res.json();
-    for (const o of data.opportunities || []) {
-      const d = new Date(o.lastStageChangeAt).getTime();
+    const opps = await fetchAllOppsPaginated(q.pipeline, q.stage);
+    for (const o of opps) {
+      const d = new Date(o.lastStageChangeAt || 0).getTime();
       if (d < JAN1_2026) continue;
       const ch = o.contactId
         ? getContactChannelCached(o.contactId)
@@ -287,23 +317,50 @@ async function fetchAllDeals(): Promise<DealRecord[]> {
     }
   }
 
-  // Settled
+  // Settled — merge of dealsClosedDeal + tcClosedDispo, deduped by opp id.
+  // Mirrors scorecard/builder.ts (the marketing builder previously only queried
+  // dealsClosedDeal AND was unpaginated, missing 3 settled deals in YTD 2026).
   const DEALS_PIPELINE = "DiGXnGTlQCOMZQJmWQe9";
+  const STAGE_DEALS_CLOSED = "245bc5b3-e2ac-4886-8928-907560ec3f15";
+  const STAGE_TC_CLOSED_DISPO = "8464b838-cb2d-497a-89f6-07c4025ae17f";
   const CLOSING_DATE_FIELD = "bbDP5pNJ96IMth9bQfh8";
-  const settledRes = await fetch(
-    `${BASE}/opportunities/search?location_id=${LOCATION_ID()}&pipeline_id=${DEALS_PIPELINE}&pipeline_stage_id=245bc5b3-e2ac-4886-8928-907560ec3f15&limit=100`,
-    { headers: getHeaders() }
+
+  const [closedA, closedB] = await Promise.all([
+    fetchAllOppsPaginated(DEALS_PIPELINE, STAGE_DEALS_CLOSED),
+    fetchAllOppsPaginated(TC_PIPELINE, STAGE_TC_CLOSED_DISPO),
+  ]);
+  const closedById = new Map<string, RawOpp>();
+  for (const o of [...closedA, ...closedB]) {
+    if (o.id && !closedById.has(o.id)) closedById.set(o.id, o);
+  }
+  const closedDeals = Array.from(closedById.values());
+  console.log(
+    `[Marketing] Settled candidates: dealsClosedDeal=${closedA.length}, tcClosedDispo=${closedB.length}, merged=${closedDeals.length}`
   );
-  if (settledRes.ok) {
-    const data = await settledRes.json();
-    for (const o of data.opportunities || []) {
-      // Fetch detail directly — no per-deal cache needed since the whole
-      // payload is rebuilt only weekly via cron now.
-      const detailRes = await fetch(`${BASE}/opportunities/${o.id}`, {
-        headers: getHeaders(),
-      });
-      if (!detailRes.ok) continue;
-      const detail = await detailRes.json();
+
+  // Batch detail fetches in parallel (10 at a time) — same shape as the
+  // scorecard builder's settled loop. Per-deal detail still needed for the
+  // closingDate custom field (id `bbDP5pNJ96IMth9bQfh8`).
+  const BATCH = 10;
+  for (let i = 0; i < closedDeals.length; i += BATCH) {
+    const slice = closedDeals.slice(i, i + BATCH);
+    const details = await Promise.all(
+      slice.map(async (o) => {
+        try {
+          const r = await fetch(`${BASE}/opportunities/${o.id}`, {
+            headers: getHeaders(),
+          });
+          if (!r.ok) return null;
+          return await r.json();
+        } catch {
+          return null;
+        }
+      })
+    );
+    for (let j = 0; j < slice.length; j++) {
+      const o = slice[j];
+      const detail = details[j];
+      if (!detail) continue;
       const opp = detail.opportunity || detail;
       const cfs: Record<string, string> = {};
       for (const cf of opp.customFields || []) {
