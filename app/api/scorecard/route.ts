@@ -1,19 +1,47 @@
 import { NextResponse } from "next/server";
 import { kv } from "@vercel/kv";
-import { buildFreshScorecard, FRESH_KEY, ScorecardCachePayload } from "./builder";
+import {
+  buildFreshScorecard,
+  FRESH_KEY,
+  ScorecardCachePayload,
+  WeekCacheEntry,
+  weekKey,
+} from "./builder";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
+// Compute every Monday-week key from 2026-01-05 → today, matching getWeeks2026
+// in the builder. Used by GET to know which per-week KV keys to mget.
+function getAllWeekStartKeys(): string[] {
+  const keys: string[] = [];
+  const current = new Date("2026-01-05T00:00:00Z");
+  const now = new Date();
+  while (current < now) {
+    const end = new Date(current);
+    end.setDate(end.getDate() + 6);
+    if (end.getTime() < now.getTime()) {
+      keys.push(current.toISOString().slice(0, 10));
+    }
+    current.setDate(current.getDate() + 7);
+  }
+  return keys;
+}
+
 // GET: thin KV reader — never hits GHL.
-// On cold miss / KV unavailable, returns 503 with friendly message. The
-// weekly cron + manual refresh button are the only writers.
+// Per-week historical lock: reads `scorecard_week_v1_{monday}` for every
+// week of 2026 so far via `kv.mget`, then assembles them. If any week is
+// missing from the per-week store, we DO NOT fall back to live GHL — we
+// return that week as null in the payload + add a `missingWeeks` note.
 export async function GET() {
-  let cached: ScorecardCachePayload | null = null;
+  const allKeys = getAllWeekStartKeys();
+  const kvKeys = allKeys.map((k) => weekKey(k));
+
+  let entries: (WeekCacheEntry | null)[] = [];
   try {
-    cached = await kv.get<ScorecardCachePayload>(FRESH_KEY);
+    entries = (await kv.mget<WeekCacheEntry[]>(...kvKeys)) || [];
   } catch (error) {
-    console.error("Scorecard GET KV read failed:", error);
+    console.error("Scorecard GET per-week mget failed:", error);
     return NextResponse.json(
       {
         error:
@@ -24,21 +52,52 @@ export async function GET() {
     );
   }
 
-  if (cached && cached.data) {
-    return NextResponse.json({
-      ...cached.data,
-      refreshedAt: cached.refreshedAt,
-    });
+  // If the per-week store is completely cold, fall back to legacy aggregate
+  // so the dashboard isn't empty between deploy and the first ?all=true run.
+  const haveAnyPerWeek = entries.some((e) => e && e.data);
+  if (!haveAnyPerWeek) {
+    try {
+      const cached = await kv.get<ScorecardCachePayload>(FRESH_KEY);
+      if (cached && cached.data) {
+        return NextResponse.json({
+          ...cached.data,
+          refreshedAt: cached.refreshedAt,
+          source: "legacy_aggregate",
+        });
+      }
+    } catch (e) {
+      console.error("Scorecard GET legacy aggregate read failed:", e);
+    }
+    return NextResponse.json(
+      {
+        error:
+          "Scorecard cache empty, refreshing on schedule. Try again in a few minutes or click Refresh.",
+        refreshedAt: null,
+      },
+      { status: 503 }
+    );
   }
 
-  return NextResponse.json(
-    {
-      error:
-        "Scorecard cache empty, refreshing on schedule. Try again in a few minutes or click Refresh.",
-      refreshedAt: null,
-    },
-    { status: 503 }
-  );
+  const weeks = [];
+  const missingWeeks: string[] = [];
+  let latestFrozen = "";
+  for (let i = 0; i < allKeys.length; i++) {
+    const k = allKeys[i];
+    const entry = entries[i];
+    if (!entry || !entry.data) {
+      missingWeeks.push(k);
+      continue;
+    }
+    weeks.push(entry.data);
+    if (entry.frozenAt > latestFrozen) latestFrozen = entry.frozenAt;
+  }
+
+  return NextResponse.json({
+    weeks,
+    lastUpdated: latestFrozen,
+    refreshedAt: latestFrozen,
+    missingWeeks: missingWeeks.length > 0 ? missingWeeks : undefined,
+  });
 }
 
 // POST: heavy refresh — protected by CRON_SECRET header.

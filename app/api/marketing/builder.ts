@@ -1,6 +1,14 @@
 export const FRESH_KEY = "marketing_cache_v3";
 export const MANUAL_INPUTS_KEY = "marketing_inputs";
 
+// Per-week historical lock — see scorecard/builder.ts for the same pattern.
+// Each entry stores ONE week's marketing metrics + frozen timestamp. Cron
+// only rebuilds current + last week; every other week stays locked.
+export const WEEK_KEY_PREFIX = "marketing_week_v1_";
+export function weekKey(monday: string): string {
+  return `${WEEK_KEY_PREFIX}${monday}`;
+}
+
 const BASE = "https://services.leadconnectorhq.com";
 const BCDI_BASE = "https://bcdi-api.fly.dev";
 
@@ -177,6 +185,48 @@ function resolveOppChannel(opp: { contactId?: string; source?: string }): string
   return "Other";
 }
 
+// Async resolver — used ONLY for settled deals (high-value, low-volume).
+// Fixes the cache-miss case where a settled-deal opportunity's contact was
+// created BEFORE 2026 (skipped by the JAN1_2026 filter in fetchAllSellerLeads)
+// AND the opp's own `source` field is empty. Without this fallback those
+// PPC settled deals fell through to "Other" (3 reported vs 5 truth in YTD 2026).
+// We intentionally do NOT use this for A-B / closing loops — those are higher
+// volume and the cached + opp.source path is fast enough to keep them sync.
+async function resolveOppChannelAsync(opp: {
+  contactId?: string;
+  source?: string;
+}): Promise<string> {
+  const cached = opp.contactId ? getContactChannelCached(opp.contactId) : null;
+  if (cached) return cached;
+  if (opp.source) {
+    const fromOpp = getChannel(opp.source, "");
+    if (fromOpp !== "Other") return fromOpp;
+  }
+  // Final resort: fetch the contact directly to read source + Marketing Campaign field
+  if (opp.contactId) {
+    try {
+      const r = await fetch(`${BASE}/contacts/${opp.contactId}`, {
+        headers: getHeaders(),
+      });
+      if (r.ok) {
+        const data = await r.json();
+        const c = data.contact || {};
+        const cfs: Record<string, string> = {};
+        for (const cf of c.customFields || []) cfs[cf.id] = cf.value;
+        const campaign = cfs[MARKETING_CAMPAIGN_FIELD] || "";
+        const ch = getChannel(c.source || "", campaign);
+        if (ch !== "Other") {
+          contactSourceCache.set(opp.contactId, ch);
+          return ch;
+        }
+      }
+    } catch {
+      // swallow — fall through to "Other"
+    }
+  }
+  return "Other";
+}
+
 async function fetchAllSellerLeads(): Promise<LeadRecord[]> {
   const leads: LeadRecord[] = [];
   let startAfterId = "";
@@ -254,7 +304,7 @@ async function fetchAllAppts(): Promise<ApptRecord[]> {
 
       appts.push({
         date: new Date(e.startTime).getTime(),
-        channel: getContactChannelCached(e.contactId || ""),
+        channel: getContactChannelCached(e.contactId || "") || "Other",
         cancelled,
         completed: !cancelled && endTime < now,
       });
@@ -396,7 +446,10 @@ async function fetchAllDeals(): Promise<DealRecord[]> {
       if (!closingDate || closingDate < "2026") continue;
       const d = new Date(closingDate).getTime();
       if (d < JAN1_2026) continue;
-      const ch = resolveOppChannel(o);
+      // Async fallback for settled deals only (low-volume, high-value).
+      // See `resolveOppChannelAsync` comment — fixes pre-2026 contact + empty
+      // opp.source PPC settled cases that were undercounted (3 → 5).
+      const ch = await resolveOppChannelAsync(o);
       deals.push({ date: d, channel: ch, category: "settled", monetaryValue });
     }
   }
@@ -433,6 +486,24 @@ export interface MarketingData {
 export interface MarketingCachePayload {
   data: MarketingData;
   refreshedAt: string;
+}
+
+// One-week per-week store entry — written to `marketing_week_v1_{monday}`.
+export interface MarketingWeekCacheEntry {
+  data: MarketingWeekData;
+  frozenAt: string;
+}
+
+export function getCronTargetWeekKeys(now: Date = new Date()): string[] {
+  const t = new Date(now);
+  t.setUTCHours(0, 0, 0, 0);
+  const day = t.getUTCDay();
+  const offsetToMonday = day === 0 ? -6 : 1 - day;
+  t.setUTCDate(t.getUTCDate() + offsetToMonday);
+  const thisMonday = t.toISOString().slice(0, 10);
+  const lastMonday = new Date(t);
+  lastMonday.setUTCDate(lastMonday.getUTCDate() - 7);
+  return [lastMonday.toISOString().slice(0, 10), thisMonday];
 }
 
 function buildWeekData(

@@ -2,6 +2,15 @@ import { fetchAllCalls2026 } from "@/app/lib/ghl-calls";
 
 export const FRESH_KEY = "scorecard_cache_v3";
 
+// Per-week historical lock. Each entry stores ONE week's metrics + the
+// timestamp it was frozen. Cron only re-computes current + last week;
+// every other week stays locked unless Ashley manually unfreezes via
+// `?week=YYYY-MM-DD` or full rebuild via `?all=true`.
+export const WEEK_KEY_PREFIX = "scorecard_week_v1_";
+export function weekKey(monday: string): string {
+  return `${WEEK_KEY_PREFIX}${monday}`;
+}
+
 const BASE = "https://services.leadconnectorhq.com";
 
 function getHeaders() {
@@ -269,6 +278,29 @@ export interface ScorecardData {
 export interface ScorecardCachePayload {
   data: ScorecardData;
   refreshedAt: string;
+}
+
+// One-week per-week store entry — what gets written to `scorecard_week_v1_{monday}`.
+export interface WeekCacheEntry {
+  data: WeekData;
+  frozenAt: string;
+}
+
+// Compute the (current + last completed) Monday keys we want to refresh on
+// the weekly cron. Returns the list of Monday-ISO keys that the default cron
+// invocation should rebuild — every other week stays locked.
+export function getCronTargetWeekKeys(now: Date = new Date()): string[] {
+  // Find this week's Monday in UTC (matches getWeeks2026 which uses UTC Mondays).
+  const t = new Date(now);
+  t.setUTCHours(0, 0, 0, 0);
+  // getUTCDay: 0 Sun … 1 Mon … 6 Sat
+  const day = t.getUTCDay();
+  const offsetToMonday = day === 0 ? -6 : 1 - day;
+  t.setUTCDate(t.getUTCDate() + offsetToMonday);
+  const thisMonday = t.toISOString().slice(0, 10);
+  const lastMonday = new Date(t);
+  lastMonday.setUTCDate(lastMonday.getUTCDate() - 7);
+  return [lastMonday.toISOString().slice(0, 10), thisMonday];
 }
 
 // ============ DATA FETCHERS ============

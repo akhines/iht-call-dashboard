@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server";
 import { kv } from "@vercel/kv";
-import { buildFreshMarketing, FRESH_KEY } from "../builder";
+import {
+  buildFreshMarketing,
+  FRESH_KEY,
+  MarketingWeekCacheEntry,
+  getCronTargetWeekKeys,
+  weekKey,
+} from "../builder";
 
 export const dynamic = "force-dynamic";
 // Bumped from 60 → 300 because the rebuilt fetchAllDeals now paginates the
@@ -8,9 +14,10 @@ export const dynamic = "force-dynamic";
 // settled-stage candidate. On full-year data that easily breaks 60s.
 export const maxDuration = 300;
 
-// GET-only refresh endpoint. Vercel Cron only does GET, so the weekly cron
-// hits this. The dashboard "Refresh now" button also calls this with
-// ?secret=$CRON_SECRET.
+// GET-only refresh endpoint — same modes as scorecard/refresh:
+//   1. (default)           — rebuild current + last week
+//   2. ?week=YYYY-MM-DD    — rebuild ONE specified week
+//   3. ?all=true           — rebuild every week from scratch
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const querySecret = searchParams.get("secret");
@@ -39,17 +46,82 @@ export async function GET(request: Request) {
     );
   }
 
+  const allFlag = searchParams.get("all") === "true";
+  const oneWeek = searchParams.get("week");
+
   try {
-    console.log("Marketing refresh: building fresh data...");
+    console.log(
+      `Marketing refresh: mode=${
+        allFlag ? "all" : oneWeek ? `week=${oneWeek}` : "cron(current+last)"
+      }`
+    );
     const data = await buildFreshMarketing();
     const refreshedAt = new Date().toISOString();
-    await kv.set(FRESH_KEY, { data, refreshedAt });
+
+    // Decide which weeks to PERSIST per-week.
+    let targetKeys: string[];
+    if (allFlag) {
+      targetKeys = data.weeks.map((w) => w.weekKey);
+    } else if (oneWeek) {
+      targetKeys = [oneWeek];
+    } else {
+      targetKeys = getCronTargetWeekKeys();
+    }
+
+    const writes: { key: string; persisted: boolean }[] = [];
+    for (const key of targetKeys) {
+      const wk = data.weeks.find((w) => w.weekKey === key);
+      if (!wk) {
+        writes.push({ key, persisted: false });
+        continue;
+      }
+      const entry: MarketingWeekCacheEntry = { data: wk, frozenAt: refreshedAt };
+      await kv.set(weekKey(key), entry);
+      writes.push({ key, persisted: true });
+    }
+
+    // Keep legacy aggregate key warm — same logic as scorecard/refresh.
+    if (allFlag) {
+      await kv.set(FRESH_KEY, { data, refreshedAt });
+    } else {
+      try {
+        const existing = await kv.get<{ data: typeof data; refreshedAt: string }>(
+          FRESH_KEY
+        );
+        if (existing && existing.data) {
+          const updatedWeeks = existing.data.weeks.map((w) => {
+            const fresh = data.weeks.find((f) => f.weekKey === w.weekKey);
+            return fresh && targetKeys.includes(w.weekKey) ? fresh : w;
+          });
+          for (const w of data.weeks) {
+            if (!updatedWeeks.find((u) => u.weekKey === w.weekKey)) {
+              updatedWeeks.push(w);
+            }
+          }
+          updatedWeeks.sort((a, b) => a.weekKey.localeCompare(b.weekKey));
+          await kv.set(FRESH_KEY, {
+            data: {
+              weeks: updatedWeeks,
+              channels: data.channels,
+              lastUpdated: refreshedAt,
+            },
+            refreshedAt,
+          });
+        } else {
+          await kv.set(FRESH_KEY, { data, refreshedAt });
+        }
+      } catch (e) {
+        console.warn("Marketing refresh: aggregate patch threw:", e);
+      }
+    }
+
     console.log("Marketing refresh: complete @", refreshedAt);
 
     return NextResponse.json({
       ok: true,
       refreshedAt,
-      weeks: data.weeks.length,
+      mode: allFlag ? "all" : oneWeek ? "week" : "cron",
+      writes,
     });
   } catch (error) {
     console.error("Marketing refresh error:", error);
