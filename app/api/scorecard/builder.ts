@@ -325,6 +325,7 @@ async function fetchAllSellerContacts2026(): Promise<SellerContact[]> {
 interface ApptRecord {
   date: number;
   calendarId: string;
+  contactId: string;
   closer: string;
   cancelled: boolean;
   completed: boolean;
@@ -332,6 +333,12 @@ interface ApptRecord {
   source: string;
   title: string;
 }
+
+// Module-level: latest appointment date per contact, per closer's calendar.
+// Populated inside fetchCalendarEvents. Used by resolveCloser as the
+// authoritative closer signal when assignedTo is Emma/unassigned.
+const mikeCalendarLatest = new Map<string, number>();
+const joshCalendarLatest = new Map<string, number>();
 
 const contactSourceCache = new Map<string, string>();
 
@@ -380,6 +387,7 @@ async function fetchCalendarEvents(calId: string, closer: string): Promise<ApptR
           appointmentStatus?: string;
           startTime: string;
           endTime: string;
+          contactId?: string;
         },
         idx: number
       ) => {
@@ -391,10 +399,22 @@ async function fetchCalendarEvents(calId: string, closer: string): Promise<ApptR
           titleLower.startsWith("c-") ||
           titleLower.includes("cancel");
         const endTime = new Date(e.endTime).getTime();
+        const startTime = new Date(e.startTime).getTime();
+        const cid = e.contactId || "";
+
+        // Track latest non-cancelled appointment per contact per closer's calendar.
+        // Used downstream to attribute TC pipeline opps to a closer when GHL
+        // assignedTo is Emma (TC coordinator) or empty.
+        if (cid && !cancelled) {
+          const map = closer === "Mike" ? mikeCalendarLatest : joshCalendarLatest;
+          const existing = map.get(cid) || 0;
+          if (startTime > existing) map.set(cid, startTime);
+        }
 
         appts.push({
-          date: new Date(e.startTime).getTime(),
+          date: startTime,
           calendarId: calId,
+          contactId: cid,
           closer,
           cancelled,
           completed: !cancelled && endTime < now,
@@ -555,9 +575,21 @@ async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
     assignedTo?: string;
   }): "Mike" | "Josh" => {
     const assignedTo = o.assignedTo || "";
+    // 1. Direct user-id assignment is authoritative
     if (mikeUserId && assignedTo === mikeUserId) return "Mike";
     if (joshUserId && assignedTo === joshUserId) return "Josh";
     const cid = o.contactId || "";
+    // 2. Calendar appointment is the canonical closer signal — whichever
+    //    closer's calendar held the most-recent appt for this contact wins.
+    //    This is what GHL "Opportunity Owner" effectively encodes when
+    //    assignedTo is Emma (the TC coordinator) or empty.
+    if (cid) {
+      const mAppt = mikeCalendarLatest.get(cid) || 0;
+      const jAppt = joshCalendarLatest.get(cid) || 0;
+      if (mAppt && mAppt >= jAppt) return "Mike";
+      if (jAppt) return "Josh";
+    }
+    // 3. Fall back to source pipeline membership
     if (cid && mikeContactIds.has(cid)) return "Mike";
     if (cid && joshContactIds.has(cid)) return "Josh";
     return mikeOffers.some((m) => m.contactId === cid) ? "Mike" : "Josh";
@@ -754,12 +786,17 @@ export async function buildFreshScorecard(): Promise<ScorecardData> {
   contactSourceCache.clear();
 
   console.log("Scorecard: fetching fresh GHL data...");
-  const [allCalls, allSellers, allAppts, allOpps] = await Promise.all([
+  // Reset calendar→closer maps each run (module-level, persists across requests otherwise)
+  mikeCalendarLatest.clear();
+  joshCalendarLatest.clear();
+  // Calendars MUST resolve before opportunities so resolveCloser can use them
+  // for TC pipeline attribution (when GHL assignedTo is Emma/empty).
+  const [allCalls, allSellers, allAppts] = await Promise.all([
     fetchAllCalls2026(),
     fetchAllSellerContacts2026(),
     fetchAllAppointments2026(),
-    fetchAllOpportunities2026(),
   ]);
+  const allOpps = await fetchAllOpportunities2026();
   console.log(
     `Scorecard: ${allCalls.length} calls, ${allSellers.length} sellers, ${allAppts.length} appts, ${allOpps.length} opps`
   );
