@@ -107,16 +107,32 @@ export default function GoogleAdsPage() {
             </div>
           </div>
         </header>
-        <div className="flex-1 bg-white">
-          <iframe
-            src="https://datastudio.google.com/embed/reporting/f5bcb1ae-3514-4f30-b7e8-11d32fdfdddf/page/FumBB"
-            width="100%"
-            height="1200"
-            frameBorder="0"
-            style={{ border: 0, width: "100%", minHeight: "calc(100vh - 73px)" }}
-            allowFullScreen
-            sandbox="allow-storage-access-by-user-activation allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
-          />
+        <div className="flex-1 bg-gray-50 p-4 sm:p-6 space-y-6 overflow-auto">
+          {[
+            { id: "FumBB", label: "Overview" },
+            { id: "vlmBB", label: "Campaigns" },
+            { id: "MkmBB", label: "Keywords / Performance" },
+          ].map((p) => (
+            <section
+              key={p.id}
+              className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden"
+            >
+              <div className="px-4 py-3 border-b border-gray-100">
+                <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider">
+                  {p.label}
+                </h3>
+              </div>
+              <iframe
+                src={`https://datastudio.google.com/embed/reporting/f5bcb1ae-3514-4f30-b7e8-11d32fdfdddf/page/${p.id}`}
+                width="100%"
+                height="700"
+                frameBorder="0"
+                style={{ border: 0, width: "100%", display: "block" }}
+                allowFullScreen
+                sandbox="allow-storage-access-by-user-activation allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+              />
+            </section>
+          ))}
         </div>
       </main>
     </div>
