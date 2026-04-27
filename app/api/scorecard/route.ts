@@ -6,32 +6,39 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 // GET: thin KV reader — never hits GHL.
-// On cold miss, returns 503 with friendly message. The weekly cron + manual
-// refresh button are the only writers.
+// On cold miss / KV unavailable, returns 503 with friendly message. The
+// weekly cron + manual refresh button are the only writers.
 export async function GET() {
+  let cached: ScorecardCachePayload | null = null;
   try {
-    const cached = await kv.get<ScorecardCachePayload>(FRESH_KEY);
-    if (cached && cached.data) {
-      return NextResponse.json({
-        ...cached.data,
-        refreshedAt: cached.refreshedAt,
-      });
-    }
+    cached = await kv.get<ScorecardCachePayload>(FRESH_KEY);
+  } catch (error) {
+    console.error("Scorecard GET KV read failed:", error);
     return NextResponse.json(
       {
         error:
-          "Scorecard cache empty, refreshing on schedule. Try again in a few minutes or click Refresh.",
+          "Scorecard cache temporarily unavailable. Try again shortly or click Refresh.",
         refreshedAt: null,
       },
       { status: 503 }
     );
-  } catch (error) {
-    console.error("Scorecard GET KV read error:", error);
-    return NextResponse.json(
-      { error: "Failed to read scorecard cache", refreshedAt: null },
-      { status: 500 }
-    );
   }
+
+  if (cached && cached.data) {
+    return NextResponse.json({
+      ...cached.data,
+      refreshedAt: cached.refreshedAt,
+    });
+  }
+
+  return NextResponse.json(
+    {
+      error:
+        "Scorecard cache empty, refreshing on schedule. Try again in a few minutes or click Refresh.",
+      refreshedAt: null,
+    },
+    { status: 503 }
+  );
 }
 
 // POST: heavy refresh — protected by CRON_SECRET header.

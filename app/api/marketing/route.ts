@@ -14,46 +14,52 @@ export const maxDuration = 30;
 // Manual inputs (spend, mailers) are still overlaid live so the user sees
 // their edits immediately without waiting for the next weekly refresh.
 export async function GET() {
+  let cached: MarketingCachePayload | null = null;
   try {
-    const cached = await kv.get<MarketingCachePayload>(FRESH_KEY);
-    if (!cached || !cached.data) {
-      return NextResponse.json(
-        {
-          error:
-            "Marketing cache empty, refreshing on schedule. Try again in a few minutes or click Refresh.",
-          refreshedAt: null,
-        },
-        { status: 503 }
-      );
-    }
-
-    // Live-overlay manual inputs (spend, mailers)
-    let manualInputs: Record<
-      string,
-      Record<string, { spend?: number; mailersSent?: number }>
-    > = {};
-    try {
-      const saved = await kv.get<typeof manualInputs>(MANUAL_INPUTS_KEY);
-      if (saved) manualInputs = saved;
-    } catch {
-      // KV miss is fine
-    }
-
-    const overlaid = applyManualInputs(cached.data.weeks, manualInputs);
-
-    return NextResponse.json({
-      weeks: overlaid,
-      channels: cached.data.channels,
-      lastUpdated: cached.data.lastUpdated,
-      refreshedAt: cached.refreshedAt,
-    });
+    cached = await kv.get<MarketingCachePayload>(FRESH_KEY);
   } catch (error) {
-    console.error("Marketing GET KV read error:", error);
+    console.error("Marketing GET KV read failed:", error);
     return NextResponse.json(
-      { error: "Failed to read marketing cache", refreshedAt: null },
-      { status: 500 }
+      {
+        error:
+          "Marketing cache temporarily unavailable. Try again shortly or click Refresh.",
+        refreshedAt: null,
+      },
+      { status: 503 }
     );
   }
+
+  if (!cached || !cached.data) {
+    return NextResponse.json(
+      {
+        error:
+          "Marketing cache empty, refreshing on schedule. Try again in a few minutes or click Refresh.",
+        refreshedAt: null,
+      },
+      { status: 503 }
+    );
+  }
+
+  // Live-overlay manual inputs (spend, mailers)
+  let manualInputs: Record<
+    string,
+    Record<string, { spend?: number; mailersSent?: number }>
+  > = {};
+  try {
+    const saved = await kv.get<typeof manualInputs>(MANUAL_INPUTS_KEY);
+    if (saved) manualInputs = saved;
+  } catch {
+    // KV miss on inputs is fine — just no overlay
+  }
+
+  const overlaid = applyManualInputs(cached.data.weeks, manualInputs);
+
+  return NextResponse.json({
+    weeks: overlaid,
+    channels: cached.data.channels,
+    lastUpdated: cached.data.lastUpdated,
+    refreshedAt: cached.refreshedAt,
+  });
 }
 
 // POST: save manual inputs (spend, mailers). Always allowed — these are
