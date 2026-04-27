@@ -48,44 +48,63 @@ async function discoverCloserUserIds(): Promise<void> {
   if (userIdsDiscovered) return;
   userIdsDiscovered = true;
   try {
-    const url = `${BASE}/users/search?locationId=${LOCATION_ID()}&limit=100`;
+    // /users/search requires companyId. /users/?locationId returns the seats
+    // attached to a location and is what we want here.
+    const url = `${BASE}/users/?locationId=${LOCATION_ID()}`;
     const res = await fetch(url, { headers: getHeaders() });
     if (!res.ok) {
       console.warn(
-        `[Scorecard] /users/search failed (${res.status}); falling back to pipeline-membership for closer attribution`
+        `[Scorecard] /users/?locationId failed (${res.status}); falling back to pipeline-membership for closer attribution`
       );
       return;
     }
     const data = await res.json();
     const users = data.users || [];
     console.log(
-      `[Scorecard] /users/search returned ${users.length} users; sample:`,
+      `[Scorecard] /users/?locationId returned ${users.length} users; sample:`,
       JSON.stringify(
-        users.slice(0, 5).map((u: { id: string; firstName?: string; lastName?: string; name?: string }) => ({
+        users.slice(0, 5).map((u: { id: string; firstName?: string; lastName?: string; name?: string; email?: string }) => ({
           id: u.id,
           firstName: u.firstName,
           lastName: u.lastName,
-          name: u.name,
+          email: u.email,
         }))
       )
     );
+
+    // Match by email first (most stable), then by name. Mike Aubele's first
+    // name is "Mike"; Josh's is actually "Joshua" — match by prefix.
+    let mikeFallback: string | null = null;
     for (const u of users) {
       const fn = (u.firstName || "").trim();
       const ln = (u.lastName || "").trim();
-      if (
-        !mikeUserId &&
-        (fn === "Mike" || fn === "Michael") &&
-        ln.toLowerCase().startsWith("aubele")
-      ) {
-        mikeUserId = u.id;
-      } else if (!mikeUserId && (fn === "Mike" || fn === "Michael")) {
-        // fallback: first Mike/Michael if no Aubele match yet
-        mikeUserId = u.id;
+      const email = (u.email || "").toLowerCase();
+
+      if (!mikeUserId) {
+        if (email === "mike@theimpacthometeam.com") {
+          mikeUserId = u.id;
+        } else if (
+          (fn === "Mike" || fn === "Michael") &&
+          ln.toLowerCase().startsWith("aubele")
+        ) {
+          mikeUserId = u.id;
+        } else if (!mikeFallback && (fn === "Mike" || fn === "Michael")) {
+          mikeFallback = u.id;
+        }
       }
-      if (!joshUserId && fn === "Josh") {
-        joshUserId = u.id;
+      if (!joshUserId) {
+        if (
+          email === "joshua@theimpacthometeam.com" ||
+          email === "josh@theimpacthometeam.com"
+        ) {
+          joshUserId = u.id;
+        } else if (fn === "Josh" || fn === "Joshua") {
+          joshUserId = u.id;
+        }
       }
     }
+    if (!mikeUserId && mikeFallback) mikeUserId = mikeFallback;
+
     console.log(
       "[Scorecard] Discovered user IDs — Mike:",
       mikeUserId,
@@ -415,21 +434,56 @@ async function fetchOppsByStage(
   stageId: string
 ): Promise<OppSearchResult[]> {
   const results: OppSearchResult[] = [];
-  const url = `${BASE}/opportunities/search?location_id=${LOCATION_ID()}&pipeline_id=${pipelineId}&pipeline_stage_id=${stageId}&limit=100`;
-  const res = await fetch(url, { headers: getHeaders() });
-  if (!res.ok) return results;
-  const data = await res.json();
-  for (const o of data.opportunities || []) {
-    results.push({
-      id: o.id,
-      name: o.name || "",
-      source: o.source || "",
-      contactId: o.contactId || "",
-      assignedTo: o.assignedTo || "",
-      lastStageChangeAt: o.lastStageChangeAt,
-      createdAt: o.createdAt,
-      monetaryValue: o.monetaryValue || 0,
-    });
+  let url = `${BASE}/opportunities/search?location_id=${LOCATION_ID()}&pipeline_id=${pipelineId}&pipeline_stage_id=${stageId}&limit=100`;
+  for (let page = 0; page < 25; page++) {
+    const res = await fetch(url, { headers: getHeaders() });
+    if (!res.ok) break;
+    const data = await res.json();
+    for (const o of data.opportunities || []) {
+      results.push({
+        id: o.id,
+        name: o.name || "",
+        source: o.source || "",
+        contactId: o.contactId || "",
+        assignedTo: o.assignedTo || "",
+        lastStageChangeAt: o.lastStageChangeAt,
+        createdAt: o.createdAt,
+        monetaryValue: o.monetaryValue || 0,
+      });
+    }
+    const next = data?.meta?.nextPageUrl;
+    if (!next) break;
+    url = next;
+  }
+  return results;
+}
+
+// Fetch every opp in a pipeline (any stage). Used to build a contact-membership
+// set for closer attribution (Mike pipeline → Mike, Josh pipeline → Josh).
+async function fetchAllOppsInPipeline(
+  pipelineId: string
+): Promise<OppSearchResult[]> {
+  const results: OppSearchResult[] = [];
+  let url = `${BASE}/opportunities/search?location_id=${LOCATION_ID()}&pipeline_id=${pipelineId}&limit=100`;
+  for (let page = 0; page < 25; page++) {
+    const res = await fetch(url, { headers: getHeaders() });
+    if (!res.ok) break;
+    const data = await res.json();
+    for (const o of data.opportunities || []) {
+      results.push({
+        id: o.id,
+        name: o.name || "",
+        source: o.source || "",
+        contactId: o.contactId || "",
+        assignedTo: o.assignedTo || "",
+        lastStageChangeAt: o.lastStageChangeAt,
+        createdAt: o.createdAt,
+        monetaryValue: o.monetaryValue || 0,
+      });
+    }
+    const next = data?.meta?.nextPageUrl;
+    if (!next) break;
+    url = next;
   }
   return results;
 }
@@ -440,14 +494,34 @@ async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
   // Discover closer user IDs + log any closing-like stages we don't already track.
   await Promise.all([discoverCloserUserIds(), logClosingLikeStages()]);
 
-  const [mikeOffers, joshOffers, bcAssigned, closedDealsA, closedDealsB] =
-    await Promise.all([
-      fetchOppsByStage(MIKE_PIPELINE, STAGES.mikeOfferMade),
-      fetchOppsByStage(JOSH_PIPELINE, STAGES.joshOffered),
-      fetchOppsByStage(TC_PIPELINE, STAGES.tcBcAssigned),
-      fetchOppsByStage(DEALS_PIPELINE, STAGES.dealsClosedDeal),
-      fetchOppsByStage(TC_PIPELINE, STAGES.tcClosedDispo),
-    ]);
+  const [
+    mikeOffers,
+    joshOffers,
+    bcAssigned,
+    closedDealsA,
+    closedDealsB,
+    mikePipelineAll,
+    joshPipelineAll,
+  ] = await Promise.all([
+    fetchOppsByStage(MIKE_PIPELINE, STAGES.mikeOfferMade),
+    fetchOppsByStage(JOSH_PIPELINE, STAGES.joshOffered),
+    fetchOppsByStage(TC_PIPELINE, STAGES.tcBcAssigned),
+    fetchOppsByStage(DEALS_PIPELINE, STAGES.dealsClosedDeal),
+    fetchOppsByStage(TC_PIPELINE, STAGES.tcClosedDispo),
+    fetchAllOppsInPipeline(MIKE_PIPELINE),
+    fetchAllOppsInPipeline(JOSH_PIPELINE),
+  ]);
+
+  console.log(
+    `[Scorecard] Pipeline membership sets — Mike pipeline opps=${mikePipelineAll.length}, Josh pipeline opps=${joshPipelineAll.length}`
+  );
+
+  const mikeContactIds = new Set(
+    mikePipelineAll.map((o) => o.contactId).filter(Boolean)
+  );
+  const joshContactIds = new Set(
+    joshPipelineAll.map((o) => o.contactId).filter(Boolean)
+  );
 
   // Merge closings, dedupe by opp id (a deal could in theory live in both stages).
   const closedById = new Map<string, OppSearchResult>();
@@ -459,12 +533,21 @@ async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
     `[Scorecard] Closings: dealsClosedDeal=${closedDealsA.length}, tcClosedDispo=${closedDealsB.length}, merged=${closedDeals.length}`
   );
 
-  // Helper: resolve closer for a TC/deals opp using assignedTo, with pipeline-membership fallback.
-  const resolveCloser = (o: { contactId?: string; assignedTo?: string }): "Mike" | "Josh" => {
+  // Resolve closer for a TC/deals opp.
+  // Priority: assignedTo on the opp itself (rare but authoritative) →
+  // pipeline membership (the contact has a Mike-pipeline or Josh-pipeline opp) →
+  // historical mikeOffers stage membership (final fallback).
+  const resolveCloser = (o: {
+    contactId?: string;
+    assignedTo?: string;
+  }): "Mike" | "Josh" => {
     const assignedTo = o.assignedTo || "";
     if (mikeUserId && assignedTo === mikeUserId) return "Mike";
     if (joshUserId && assignedTo === joshUserId) return "Josh";
-    return mikeOffers.some((m) => m.contactId === o.contactId) ? "Mike" : "Josh";
+    const cid = o.contactId || "";
+    if (cid && mikeContactIds.has(cid)) return "Mike";
+    if (cid && joshContactIds.has(cid)) return "Josh";
+    return mikeOffers.some((m) => m.contactId === cid) ? "Mike" : "Josh";
   };
 
   for (const o of mikeOffers) {
@@ -494,11 +577,12 @@ async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
       });
   }
 
-  // A-B signed: ALL TC pipeline opps, use createdAt
-  const tcAllUrl = `${BASE}/opportunities/search?location_id=${LOCATION_ID()}&pipeline_id=${TC_PIPELINE}&limit=100`;
-  const tcAllRes = await fetch(tcAllUrl, { headers: getHeaders() });
-  if (tcAllRes.ok) {
-    const tcData = await tcAllRes.json();
+  // A-B signed: ALL TC pipeline opps, use createdAt (paginated)
+  let tcNextUrl: string | null = `${BASE}/opportunities/search?location_id=${LOCATION_ID()}&pipeline_id=${TC_PIPELINE}&limit=100`;
+  for (let page = 0; page < 25 && tcNextUrl; page++) {
+    const tcRes: Response = await fetch(tcNextUrl, { headers: getHeaders() });
+    if (!tcRes.ok) break;
+    const tcData = await tcRes.json();
     for (const o of tcData.opportunities || []) {
       const d = new Date(o.createdAt).getTime();
       if (d >= JAN1_2026) {
@@ -519,6 +603,7 @@ async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
         });
       }
     }
+    tcNextUrl = tcData?.meta?.nextPageUrl || null;
   }
 
   // B-C signed
