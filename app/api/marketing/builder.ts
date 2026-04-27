@@ -71,24 +71,38 @@ const MARKETING_CAMPAIGN_FIELD = "4fOhwf1m5nhK1c9vI6SJ";
 const JAN1_2026 = new Date("2026-01-01T00:00:00Z").getTime();
 
 function getChannel(source: string, campaign: string): string {
-  const s = (source + " " + campaign).toLowerCase();
-  if (s.includes("tv")) return "TV";
-  if (s.includes("ppc") || s.includes("google ads")) return "PPC";
-  if (s.includes("direct mail") || s.includes("mail")) return "Mail";
-  if (s.includes("seo") || s.includes("google search") || s.includes("organic"))
-    return "SEO";
-  if (s.includes("ppl") || s.includes("pay per lead")) return "PPL";
-  if (s.includes("gmb") || s.includes("google my business")) return "SEO";
-  if (s.includes("referral")) return "Other";
-  if (s.includes("probate")) return "Mail";
-  if (
-    s.includes("emma") ||
-    s.includes("josh smrt") ||
-    s.includes("callrail") ||
-    s.includes("other: not found")
-  )
-    return "Other";
-  return "Other";
+  // Use SOURCE as primary signal (set by GHL workflow at lead creation,
+  // authoritative). Fall back to campaign only when source returns no match.
+  // Order matters — check PPC BEFORE TV so that a deal with source
+  // "PPC: Google Ads" whose contact also has campaign field "TV AD"
+  // doesn't get miscategorized as TV.
+  const matchOne = (raw: string): string | null => {
+    const s = (raw || "").toLowerCase().trim();
+    if (!s) return null;
+    if (s.includes("ppc") || s.includes("google ads")) return "PPC";
+    if (
+      s.includes("seo") ||
+      s.includes("google search") ||
+      s.includes("organic") ||
+      s.includes("gmb") ||
+      s.includes("google my business")
+    )
+      return "SEO";
+    if (s.includes("direct mail") || s.includes("probate")) return "Mail";
+    if (s.startsWith("tv") || /\btv\b/.test(s)) return "TV";
+    if (s.includes("ppl") || s.includes("pay per lead")) return "PPL";
+    if (s.includes("referral")) return "Other";
+    if (s.includes("mail")) return "Mail";
+    if (
+      s.includes("emma") ||
+      s.includes("josh smrt") ||
+      s.includes("callrail") ||
+      s.includes("other: not found")
+    )
+      return "Other";
+    return null;
+  };
+  return matchOne(source) || matchOne(campaign) || "Other";
 }
 
 interface Week {
