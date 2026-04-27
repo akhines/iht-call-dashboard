@@ -53,8 +53,11 @@ type ColFmt = (v: number | string) => string;
 
 function fmtDate(v: number | string) {
   const iso = String(v);
-  if (!iso || iso.startsWith("Total") || iso.startsWith("Avg") || iso.startsWith("Q") || iso.startsWith("Jan") || iso.startsWith("Feb") || iso.startsWith("Mar") || iso === "") return String(v);
+  // Only attempt date parsing on YYYY-MM-DD-shaped strings; anything else
+  // (labels like "Apr 2026", "Total", "Avg/Week", "Q1 2026") returns verbatim.
+  if (!/^\d{4}-\d{2}-\d{2}/.test(iso)) return String(v);
   const d = new Date(iso + "T00:00:00");
+  if (isNaN(d.getTime())) return String(v);
   return d.toLocaleDateString("en-US", { month: "numeric", day: "numeric" });
 }
 
