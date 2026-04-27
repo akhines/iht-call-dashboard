@@ -103,6 +103,18 @@ function fmtCostPer(spend: number, count: number): string {
   return `$${Math.round(v).toLocaleString("en-US")}`;
 }
 
+// Convert API's `monthLabel` (e.g. "Feb 2026") to a YYYY-MM string for the <select>.
+const MONTH_NAMES: Record<string, string> = {
+  jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06",
+  jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12",
+};
+function monthLabelToYM(label: string): string {
+  const m = label.trim().match(/^([A-Za-z]+)\s+(\d{4})/);
+  if (!m) return "";
+  const num = MONTH_NAMES[m[1].slice(0, 3).toLowerCase()];
+  return num ? `${m[2]}-${num}` : "";
+}
+
 function fmtMonthInput(billingMonth: string): string {
   // YYYY-MM → "Feb 2026" using en-US locale.
   if (!/^\d{4}-\d{2}$/.test(billingMonth)) return billingMonth;
@@ -145,8 +157,11 @@ export default function TvPage() {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const json: TvPayload = await r.json();
         setData(json);
-        if (!selectedMonth && json.summary.billingMonth) {
-          setSelectedMonth(json.summary.billingMonth);
+        // Auto-select the dropdown to whichever month the API returned data for.
+        // The API summary uses `monthLabel` (e.g. "Feb 2026"); convert to YYYY-MM for the <select> value.
+        if (!selectedMonth && json.summary.monthLabel) {
+          const ym = monthLabelToYM(json.summary.monthLabel);
+          if (ym) setSelectedMonth(ym);
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
