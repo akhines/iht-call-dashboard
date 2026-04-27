@@ -60,35 +60,64 @@ const RefreshIcon = () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 2
 // Client-side cache
 let mktCachedWeeks: MarketingWeekData[] | null = null;
 let mktCachedChannels: string[] | null = null;
-let mktCachedLastUpdated = "";
+let mktCachedRefreshedAt = "";
+
+function formatRefreshedAt(iso: string): string {
+  if (!iso) return "never";
+  try {
+    const d = new Date(iso);
+    return (
+      d.toLocaleString("en-US", {
+        timeZone: "America/New_York",
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+      }) + " ET"
+    );
+  } catch {
+    return iso;
+  }
+}
 
 export default function MarketingPage() {
   const [weeks, setWeeks] = useState<MarketingWeekData[]>(mktCachedWeeks || []);
   const [channels, setChannels] = useState<string[]>(mktCachedChannels || []);
   const [loading, setLoading] = useState(!mktCachedWeeks);
   const [error, setError] = useState("");
-  const [lastUpdated, setLastUpdated] = useState(mktCachedLastUpdated);
+  const [refreshedAt, setRefreshedAt] = useState(mktCachedRefreshedAt);
+  const [refreshing, setRefreshing] = useState(false);
   const [editingCell, setEditingCell] = useState<{ weekKey: string; channel: string; metric: string } | null>(null);
   const [editValue, setEditValue] = useState("");
   const [saving, setSaving] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  const fetchData = (forceRefresh = false) => {
+  const fetchData = () => {
     setLoading(true);
-    fetch(`/api/marketing${forceRefresh ? "?refresh=true" : ""}`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.error) setError(data.error);
-        else {
-          const w = data.weeks || [];
-          const c = data.channels || [];
-          const u = data.lastUpdated || "";
+    setError("");
+    fetch(`/api/marketing`)
+      .then(async (r) => ({ status: r.status, json: await r.json() }))
+      .then(({ status, json }) => {
+        if (status === 503) {
+          setError(
+            json.error || "Marketing scorecard is refreshing — try again shortly."
+          );
+          setRefreshedAt(json.refreshedAt || "");
+          mktCachedRefreshedAt = json.refreshedAt || "";
+        } else if (json.error) {
+          setError(json.error);
+        } else {
+          const w = json.weeks || [];
+          const c = json.channels || [];
+          const r = json.refreshedAt || json.lastUpdated || "";
           mktCachedWeeks = w;
           mktCachedChannels = c;
-          mktCachedLastUpdated = u;
+          mktCachedRefreshedAt = r;
           setWeeks(w);
           setChannels(c);
-          setLastUpdated(u);
+          setRefreshedAt(r);
         }
       })
       .catch(() => setError("Failed to load"))
@@ -96,6 +125,41 @@ export default function MarketingPage() {
   };
 
   useEffect(() => { if (!mktCachedWeeks) fetchData(); }, []);
+
+  async function manualRefresh() {
+    const secret = window.prompt(
+      "Enter CRON_SECRET to force a refresh (rebuilds from GHL — takes up to 60s):"
+    );
+    if (!secret) return;
+    setRefreshing(true);
+    setError("");
+    try {
+      const res = await fetch(
+        `/api/marketing/refresh?secret=${encodeURIComponent(secret)}`
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || `Refresh failed (${res.status})`);
+        setRefreshing(false);
+        return;
+      }
+      // Re-read the cache
+      const reread = await fetch("/api/marketing").then((r) => r.json());
+      const w = reread.weeks || [];
+      const c = reread.channels || [];
+      const r = reread.refreshedAt || reread.lastUpdated || "";
+      mktCachedWeeks = w;
+      mktCachedChannels = c;
+      mktCachedRefreshedAt = r;
+      setWeeks(w);
+      setChannels(c);
+      setRefreshedAt(r);
+    } catch (err) {
+      setError("Refresh failed: " + String(err));
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   async function saveManualInput(weekKey: string, channel: string, metric: string, value: number) {
     setSaving(true);
@@ -233,15 +297,25 @@ export default function MarketingPage() {
             <h2 className="text-lg font-bold text-gray-900">2026 Marketing Scorecard</h2>
             <p className="text-sm text-gray-500 hidden sm:block">
               Channel performance by week &middot; Click spend/mailer cells to edit
-              {lastUpdated && <span className="ml-2 text-xs text-gray-400">Updated {new Date(lastUpdated).toLocaleTimeString()}</span>}
+            </p>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Last refreshed: <span className="font-medium text-gray-700">{formatRefreshedAt(refreshedAt)}</span>
+              <span className="ml-2 text-gray-400">(weekly cron Mon 6 AM ET)</span>
             </p>
             </div>
           </div>
           <div className="flex items-center gap-3">
             {saving && <span className="text-blue-500 text-xs animate-pulse">Saving...</span>}
+            {refreshing && <span className="text-blue-500 text-xs animate-pulse">Refreshing from GHL...</span>}
             {error && <span className="text-red-500 text-xs">{error}</span>}
-            <button onClick={() => fetchData(true)} className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-500 hover:text-gray-700 transition" title="Force Refresh">
+            <button
+              onClick={manualRefresh}
+              disabled={refreshing}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 hover:text-gray-900 text-xs font-medium transition disabled:opacity-50"
+              title="Force refresh from GHL (admin only)"
+            >
               <RefreshIcon />
+              <span className="hidden sm:inline">Refresh now</span>
             </button>
           </div>
         </header>

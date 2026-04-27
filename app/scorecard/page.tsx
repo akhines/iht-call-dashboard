@@ -8,7 +8,7 @@ import {
 
 // Client-side cache to prevent re-fetch on every tab switch
 let cachedWeeks: WeekData[] | null = null;
-let cachedLastUpdated = "";
+let cachedRefreshedAt = "";
 
 interface SourceBreakdown { [source: string]: number; }
 
@@ -164,32 +164,88 @@ const MONTHS = ["January", "February", "March", "April", "May", "June", "July", 
 
 const RefreshIcon = () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>;
 
+function formatRefreshedAt(iso: string): string {
+  if (!iso) return "never";
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString("en-US", {
+      timeZone: "America/New_York",
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    }) + " ET";
+  } catch {
+    return iso;
+  }
+}
+
 export default function ScorecardPage() {
   const [weeks, setWeeks] = useState<WeekData[]>(cachedWeeks || []);
   const [drilldown, setDrilldown] = useState<{ title: string; data: Record<string, number> } | null>(null);
   const [loading, setLoading] = useState(!cachedWeeks);
   const [error, setError] = useState("");
-  const [lastUpdated, setLastUpdated] = useState(cachedLastUpdated);
+  const [refreshedAt, setRefreshedAt] = useState(cachedRefreshedAt);
+  const [refreshing, setRefreshing] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
     if (cachedWeeks) return; // Already have data, skip fetch
     fetch("/api/scorecard")
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.error) setError(data.error);
-        else {
-          const w = data.weeks || [];
-          const u = data.lastUpdated || "";
+      .then(async (r) => ({ status: r.status, json: await r.json() }))
+      .then(({ status, json }) => {
+        if (status === 503) {
+          setError(json.error || "Scorecard is refreshing — try again shortly.");
+          setRefreshedAt(json.refreshedAt || "");
+          cachedRefreshedAt = json.refreshedAt || "";
+        } else if (json.error) {
+          setError(json.error);
+        } else {
+          const w = json.weeks || [];
+          const r = json.refreshedAt || json.lastUpdated || "";
           cachedWeeks = w;
-          cachedLastUpdated = u;
+          cachedRefreshedAt = r;
           setWeeks(w);
-          setLastUpdated(u);
+          setRefreshedAt(r);
         }
       })
       .catch(() => setError("Failed to load scorecard"))
       .finally(() => setLoading(false));
   }, []);
+
+  async function manualRefresh() {
+    const secret = window.prompt(
+      "Enter CRON_SECRET to force a refresh (rebuilds from GHL — takes up to 60s):"
+    );
+    if (!secret) return;
+    setRefreshing(true);
+    setError("");
+    try {
+      const res = await fetch(
+        `/api/scorecard/refresh?secret=${encodeURIComponent(secret)}`
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || `Refresh failed (${res.status})`);
+        setRefreshing(false);
+        return;
+      }
+      // Re-read the cache
+      const reread = await fetch("/api/scorecard").then((r) => r.json());
+      const w = reread.weeks || [];
+      const r = reread.refreshedAt || reread.lastUpdated || "";
+      cachedWeeks = w;
+      cachedRefreshedAt = r;
+      setWeeks(w);
+      setRefreshedAt(r);
+    } catch (err) {
+      setError("Refresh failed: " + String(err));
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   // Monthly/Quarterly summaries
   const monthlySummaries = useMemo(() => {
@@ -353,15 +409,24 @@ export default function ScorecardPage() {
             <h2 className="text-lg font-bold text-gray-900">2026 Operations Scorecard</h2>
             <p className="text-sm text-gray-500 hidden sm:block">
               Weekly KPIs &middot; {weeks.length} weeks &middot; Click numbers for source breakdown
-              {lastUpdated && <span className="ml-2 text-xs text-gray-400">Updated {new Date(lastUpdated).toLocaleTimeString()}</span>}
+            </p>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Last refreshed: <span className="font-medium text-gray-700">{formatRefreshedAt(refreshedAt)}</span>
+              <span className="ml-2 text-gray-400">(weekly cron Mon 6 AM ET)</span>
             </p>
             </div>
           </div>
           <div className="flex items-center gap-3">
             {error && <span className="text-red-500 text-xs">{error}</span>}
-            <button onClick={() => { setLoading(true); setError(""); fetch("/api/scorecard?refresh=true").then(r => r.json()).then(d => { const w = d.weeks || []; const u = d.lastUpdated || ""; cachedWeeks = w; cachedLastUpdated = u; setWeeks(w); setLastUpdated(u); }).catch(() => setError("Failed")).finally(() => setLoading(false)); }}
-              className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-500 hover:text-gray-700 transition" title="Force Refresh">
+            {refreshing && <span className="text-blue-500 text-xs animate-pulse">Refreshing from GHL...</span>}
+            <button
+              onClick={manualRefresh}
+              disabled={refreshing}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 hover:text-gray-900 text-xs font-medium transition disabled:opacity-50"
+              title="Force refresh from GHL (admin only)"
+            >
               <RefreshIcon />
+              <span className="hidden sm:inline">Refresh now</span>
             </button>
           </div>
         </header>
