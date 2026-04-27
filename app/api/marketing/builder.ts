@@ -158,9 +158,23 @@ interface DealRecord {
 
 const contactSourceCache = new Map<string, string>();
 
-function getContactChannelCached(contactId: string): string {
-  if (!contactId) return "Other";
-  return contactSourceCache.get(contactId) || "Other";
+function getContactChannelCached(contactId: string): string | null {
+  if (!contactId) return null;
+  return contactSourceCache.get(contactId) || null;
+}
+
+// Resolve channel for an opportunity. Priority:
+// 1. Contact source cache (set during fetchAllSellerLeads from contact source+campaign)
+// 2. Opportunity's own `source` field (carries contact source — set by GHL workflow)
+// 3. "Other" as final fallback (logged so we can spot mis-attributions)
+function resolveOppChannel(opp: { contactId?: string; source?: string }): string {
+  const cached = opp.contactId ? getContactChannelCached(opp.contactId) : null;
+  if (cached) return cached;
+  if (opp.source) {
+    const fromOpp = getChannel(opp.source, "");
+    if (fromOpp !== "Other") return fromOpp;
+  }
+  return "Other";
 }
 
 async function fetchAllSellerLeads(): Promise<LeadRecord[]> {
@@ -298,9 +312,7 @@ async function fetchAllDeals(): Promise<DealRecord[]> {
   for (const o of tcOpps) {
     const d = new Date(o.createdAt || 0).getTime();
     if (d < JAN1_2026) continue;
-    const channel = o.contactId
-      ? getContactChannelCached(o.contactId)
-      : getChannel(o.source || "", "");
+    const channel = resolveOppChannel(o);
     deals.push({
       date: d,
       channel,
@@ -319,9 +331,7 @@ async function fetchAllDeals(): Promise<DealRecord[]> {
     for (const o of opps) {
       const d = new Date(o.lastStageChangeAt || 0).getTime();
       if (d < JAN1_2026) continue;
-      const ch = o.contactId
-        ? getContactChannelCached(o.contactId)
-        : getChannel(o.source || "", "");
+      const ch = resolveOppChannel(o);
       deals.push({
         date: d,
         channel: ch,
@@ -386,9 +396,7 @@ async function fetchAllDeals(): Promise<DealRecord[]> {
       if (!closingDate || closingDate < "2026") continue;
       const d = new Date(closingDate).getTime();
       if (d < JAN1_2026) continue;
-      const ch = o.contactId
-        ? getContactChannelCached(o.contactId)
-        : getChannel(o.source || "", "");
+      const ch = resolveOppChannel(o);
       deals.push({ date: d, channel: ch, category: "settled", monetaryValue });
     }
   }
