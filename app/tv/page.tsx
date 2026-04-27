@@ -168,15 +168,11 @@ export default function TvPage() {
     try {
       const fd = new FormData();
       fd.append("file", file);
-      // `kind` omitted — server auto-detects.
-      const apiKey = window.prompt("Enter BCDI_API_KEY to upload:");
-      if (!apiKey) {
-        setUploading(false);
-        return;
-      }
-      const r = await fetch(`${BCDI_API}/api/tv/ingest-invoice`, {
+      // `kind` omitted — server auto-detects. Upload routes through
+      // /api/tv/upload (server-side proxy) so the BCDI_API_KEY stays in
+      // server env vars, never sent to the browser.
+      const r = await fetch(`/api/tv/upload`, {
         method: "POST",
-        headers: { "x-api-key": apiKey },
         body: fd,
       });
       const json = await r.json();
