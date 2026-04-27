@@ -267,6 +267,77 @@ export default function MarketingPage() {
     };
   }, [channelTotals]);
 
+  // Top-Line KPI computations:
+  //   - Cost per Contract = YTD spend / YTD ab (contracts signed)
+  //   - Cost per Closed Deal = YTD spend / YTD closings
+  //   - Marketing ROI = (grossProfit - spend) / spend * 100
+  //   - Leads MTD vs prior month — uses week.startDate to bucket
+  //   - Contracts Signed MTD = sum of ab across current calendar-month weeks
+  const topLineKpis = useMemo(() => {
+    const now = new Date();
+    const curY = now.getFullYear();
+    const curM = now.getMonth(); // 0-indexed
+    const prevM = curM === 0 ? 11 : curM - 1;
+    const prevY = curM === 0 ? curY - 1 : curY;
+
+    let mtdLeads = 0;
+    let prevMonthLeads = 0;
+    let mtdContracts = 0;
+
+    for (const w of weeks) {
+      // weekKey/startDate is YYYY-MM-DD; parse without TZ shift
+      const parts = (w.startDate || w.weekKey || "").split("-");
+      if (parts.length !== 3) continue;
+      const wy = parseInt(parts[0], 10);
+      const wm = parseInt(parts[1], 10) - 1; // 0-indexed
+      if (!isFinite(wy) || !isFinite(wm)) continue;
+      const inCur = wy === curY && wm === curM;
+      const inPrev = wy === prevY && wm === prevM;
+      if (!inCur && !inPrev) continue;
+      for (const ch of Object.keys(w.channels || {})) {
+        const d = w.channels[ch];
+        if (!d) continue;
+        if (inCur) {
+          mtdLeads += d.leads || 0;
+          mtdContracts += d.ab || 0;
+        }
+        if (inPrev) {
+          prevMonthLeads += d.leads || 0;
+        }
+      }
+    }
+
+    const spend = ytdAllTotals.spend;
+    const ab = ytdAllTotals.ab;
+    const closings = ytdAllTotals.closings;
+    const gp = ytdAllTotals.grossProfit;
+
+    const costPerContract = ab > 0 ? spend / ab : 0;
+    const costPerClosed = closings > 0 ? spend / closings : 0;
+    const roiPct = spend > 0 ? ((gp - spend) / spend) * 100 : 0;
+
+    const leadsDelta = mtdLeads - prevMonthLeads;
+    const leadsPctChange =
+      prevMonthLeads > 0
+        ? ((mtdLeads - prevMonthLeads) / prevMonthLeads) * 100
+        : 0;
+
+    return {
+      costPerContract,
+      hasContracts: ab > 0,
+      costPerClosed,
+      hasClosings: closings > 0,
+      roiPct,
+      hasSpend: spend > 0,
+      mtdLeads,
+      prevMonthLeads,
+      leadsDelta,
+      leadsPctChange,
+      hasPrevLeads: prevMonthLeads > 0,
+      mtdContracts,
+    };
+  }, [weeks, ytdAllTotals]);
+
   if (loading) {
     return (
       <div className="flex h-screen items-center justify-center bg-gray-50">
@@ -382,6 +453,127 @@ export default function MarketingPage() {
         </header>
 
         <div className="p-4 sm:p-6 space-y-6">
+          {/* ── Top-Line KPIs ──────────────────────────────────────
+              5-second glance row: cost per contract, cost per closing,
+              ROI, leads MTD vs last month, contracts MTD. Mirrors the
+              YTD Snapshot card chrome (rounded-xl shadow-sm border). */}
+          <section>
+            <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-1">
+              Top-Line KPIs
+            </h3>
+            <p className="text-xs text-gray-500 mb-3">
+              5-second glance — Cost per contract &amp; closing, ROI, leads MTD
+              vs last, contracts MTD.
+            </p>
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                {/* 1. Cost per Contract */}
+                <div className="bg-gray-50 border border-gray-100 rounded-lg p-3">
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">
+                    Cost per Contract
+                  </p>
+                  <p className="text-lg font-bold text-gray-900 mt-1">
+                    {topLineKpis.hasContracts
+                      ? fmtMoney0(topLineKpis.costPerContract)
+                      : "—"}
+                  </p>
+                  <p className="text-[10px] text-gray-400 mt-0.5">
+                    YTD spend ÷ contracts
+                  </p>
+                </div>
+
+                {/* 2. Cost per Closed Deal */}
+                <div className="bg-gray-50 border border-gray-100 rounded-lg p-3">
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">
+                    Cost / Closed Deal
+                  </p>
+                  <p className="text-lg font-bold text-gray-900 mt-1">
+                    {topLineKpis.hasClosings
+                      ? fmtMoney0(topLineKpis.costPerClosed)
+                      : "—"}
+                  </p>
+                  <p className="text-[10px] text-gray-400 mt-0.5">
+                    YTD spend ÷ closings
+                  </p>
+                </div>
+
+                {/* 3. Marketing ROI */}
+                <div className="bg-gray-50 border border-gray-100 rounded-lg p-3">
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">
+                    Marketing ROI
+                  </p>
+                  <p
+                    className={`text-lg font-bold mt-1 ${
+                      !topLineKpis.hasSpend
+                        ? "text-gray-900"
+                        : topLineKpis.roiPct > 0
+                          ? "text-emerald-600"
+                          : topLineKpis.roiPct < 0
+                            ? "text-rose-600"
+                            : "text-gray-900"
+                    }`}
+                  >
+                    {topLineKpis.hasSpend
+                      ? `${Math.round(topLineKpis.roiPct).toLocaleString("en-US")}%`
+                      : "—"}
+                  </p>
+                  <p className="text-[10px] text-gray-400 mt-0.5">
+                    (Profit − Spend) ÷ Spend
+                  </p>
+                </div>
+
+                {/* 4. Leads MTD vs Last Month */}
+                <div className="bg-gray-50 border border-gray-100 rounded-lg p-3">
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">
+                    Leads MTD vs Last
+                  </p>
+                  <p className="text-lg font-bold text-gray-900 mt-1 flex items-baseline gap-1.5">
+                    <span>{topLineKpis.mtdLeads.toLocaleString()}</span>
+                    {topLineKpis.hasPrevLeads && (
+                      <span
+                        className={`text-xs font-semibold ${
+                          topLineKpis.leadsDelta > 0
+                            ? "text-emerald-600"
+                            : topLineKpis.leadsDelta < 0
+                              ? "text-rose-600"
+                              : "text-gray-500"
+                        }`}
+                      >
+                        {topLineKpis.leadsDelta > 0
+                          ? "↑"
+                          : topLineKpis.leadsDelta < 0
+                            ? "↓"
+                            : ""}{" "}
+                        {Math.abs(
+                          Math.round(topLineKpis.leadsPctChange),
+                        ).toLocaleString("en-US")}
+                        %
+                      </span>
+                    )}
+                  </p>
+                  <p className="text-[10px] text-gray-400 mt-0.5">
+                    {topLineKpis.hasPrevLeads
+                      ? `vs ${topLineKpis.prevMonthLeads.toLocaleString()} prior month`
+                      : "no prior-month leads"}
+                  </p>
+                </div>
+
+                {/* 5. Contracts Signed MTD */}
+                <div className="bg-gray-50 border border-gray-100 rounded-lg p-3">
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">
+                    Contracts Signed MTD
+                  </p>
+                  <p className="text-lg font-bold text-gray-900 mt-1">
+                    {topLineKpis.mtdContracts.toLocaleString()}
+                  </p>
+                  <p className="text-[10px] text-gray-400 mt-0.5">
+                    Current calendar month
+                  </p>
+                </div>
+              </div>
+            </div>
+          </section>
+
           {/* ── YTD Channel Cost Cards ──────────────────────────
               Source: spend pulled from '2026 Marketing Scorecard'
               cols I/O/U via bcdi-api → Vercel KV → /api/marketing.
@@ -472,6 +664,47 @@ export default function MarketingPage() {
                               {fmtCostPer(t.spend, t.closings)}
                             </span>
                           </div>
+                          {/* Extended footer rows: Gross Profit / CAC / ROI */}
+                          <div className="flex justify-between text-xs">
+                            <span className="text-gray-500">Gross Profit</span>
+                            <span className="font-semibold text-gray-900">
+                              {fmtMoney0(t.grossProfit)}
+                            </span>
+                          </div>
+                          <div className="flex justify-between text-xs">
+                            <span className="text-gray-500">CAC</span>
+                            <span className="font-semibold text-gray-900">
+                              {fmtCostPer(t.spend, t.closings)}
+                            </span>
+                          </div>
+                          {(() => {
+                            const hasSpend = (t.spend || 0) > 0;
+                            const roi = hasSpend
+                              ? Math.round(
+                                  ((t.grossProfit - t.spend) / t.spend) * 100,
+                                )
+                              : 0;
+                            return (
+                              <div className="flex justify-between text-xs">
+                                <span className="text-gray-500">ROI</span>
+                                <span
+                                  className={`font-semibold ${
+                                    !hasSpend
+                                      ? "text-gray-900"
+                                      : roi > 0
+                                        ? "text-emerald-600"
+                                        : roi < 0
+                                          ? "text-rose-600"
+                                          : "text-gray-900"
+                                  }`}
+                                >
+                                  {hasSpend
+                                    ? `${roi.toLocaleString("en-US")}%`
+                                    : "—"}
+                                </span>
+                              </div>
+                            );
+                          })()}
                         </div>
                       </div>
                     );
