@@ -714,10 +714,10 @@ export default function MarketingPage() {
                           <span className="text-xs text-gray-400">YTD</span>
                         </div>
                         <div className="flex items-baseline gap-1 mb-3">
-                          <span className="text-2xl font-bold text-gray-900">
-                            {fmtMoney0(t.spend)}
+                          <span className="text-2xl font-bold text-emerald-600">
+                            {fmtMoney0(t.grossProfit)}
                           </span>
-                          <span className="text-sm text-gray-400">spend</span>
+                          <span className="text-sm text-gray-400">revenue</span>
                         </div>
                         <div className="grid grid-cols-3 gap-2 mb-3 text-center border-t border-gray-100 pt-3">
                           <div>
@@ -781,9 +781,9 @@ export default function MarketingPage() {
                             </span>
                           </div>
                           <div className="flex justify-between text-xs">
-                            <span className="text-gray-500">Gross Profit</span>
+                            <span className="text-gray-500">Spend</span>
                             <span className="font-semibold text-gray-900">
-                              {fmtMoney0(t.grossProfit)}
+                              {fmtMoney0(t.spend)}
                             </span>
                           </div>
                           <div className="flex justify-between text-xs">
