@@ -27,11 +27,19 @@ const TC_PIPELINE = "ofMQolXiKGyg6WNOJS88";
 // Stage IDs
 const STAGES = {
   mikeOfferMade: "cdd65b88-c954-4f80-bd23-3d4dced615ad",
+  mikeYardLine: "64d1fa71-6952-41cd-be5e-1536715b6d87", // Mike pipeline "1 YD LINE" — seller agreement signed
   joshOffered: "d6a230e1-fc7d-4881-b238-70b83230dfc4",
+  joshYardLine: "f02c3be3-680d-46f7-b36f-766a8f72f39b", // Josh pipeline "1 YD LINE"
+  joshLtfu: "80557eb7-6144-4ed8-9453-2c2488725294", // Josh pipeline "LTFU"
+  joshWon: "0c4afc64-8163-4723-9f78-d4a0d7e1d037", // Josh pipeline "WON!"
   tcBcAssigned: "79163384-97f7-4b12-a3ca-a15c092f04f4",
   tcClosedDispo: "8464b838-cb2d-497a-89f6-07c4025ae17f",
   dealsClosedDeal: "245bc5b3-e2ac-4886-8928-907560ec3f15",
 };
+
+// Stages that count as a SELLER-side A-B contract being signed in each closer's own pipeline
+const MIKE_AB_SIGNED_STAGES = new Set<string>([STAGES.mikeYardLine]);
+const JOSH_AB_SIGNED_STAGES = new Set<string>([STAGES.joshYardLine, STAGES.joshLtfu, STAGES.joshWon]);
 
 const CONTACT_TYPE_FIELD = "IfkLFRqVzW9XrCkXvPUQ";
 const MARKETING_CAMPAIGN_FIELD = "4fOhwf1m5nhK1c9vI6SJ";
@@ -424,6 +432,7 @@ interface OppSearchResult {
   source: string;
   contactId: string;
   assignedTo: string;
+  pipelineStageId: string;
   lastStageChangeAt: string;
   createdAt: string;
   monetaryValue: number;
@@ -446,6 +455,7 @@ async function fetchOppsByStage(
         source: o.source || "",
         contactId: o.contactId || "",
         assignedTo: o.assignedTo || "",
+        pipelineStageId: o.pipelineStageId || "",
         lastStageChangeAt: o.lastStageChangeAt,
         createdAt: o.createdAt,
         monetaryValue: o.monetaryValue || 0,
@@ -476,6 +486,7 @@ async function fetchAllOppsInPipeline(
         source: o.source || "",
         contactId: o.contactId || "",
         assignedTo: o.assignedTo || "",
+        pipelineStageId: o.pipelineStageId || "",
         lastStageChangeAt: o.lastStageChangeAt,
         createdAt: o.createdAt,
         monetaryValue: o.monetaryValue || 0,
@@ -577,13 +588,59 @@ async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
       });
   }
 
-  // A-B signed: ALL TC pipeline opps, use createdAt (paginated)
+  // A-B signed (seller agreement signed). Three sources, deduped by contactId
+  // so a deal that lives in both a closer's pipeline AND TC pipeline counts once.
+  // Source 1: Mike pipeline opps at MIKE_AB_SIGNED_STAGES → closer Mike
+  // Source 2: Josh pipeline opps at JOSH_AB_SIGNED_STAGES → closer Josh
+  // Source 3: TC pipeline opps (catch-all — TC = post-A-B-signed by definition) → closer via resolveCloser
+  const abSignedSeen = new Set<string>();
+
+  for (const o of mikePipelineAll) {
+    if (!MIKE_AB_SIGNED_STAGES.has(o.pipelineStageId || "")) continue;
+    const cid = o.contactId || o.id || "";
+    if (cid && abSignedSeen.has(cid)) continue;
+    if (cid) abSignedSeen.add(cid);
+    const d = new Date(o.lastStageChangeAt).getTime();
+    if (d < JAN1_2026) continue;
+    const src = o.contactId ? await getContactSource(o.contactId) : o.source;
+    opps.push({
+      date: d,
+      category: "ab_signed",
+      closer: "Mike",
+      name: o.name,
+      source: src,
+      monetaryValue: o.monetaryValue || 0,
+    });
+  }
+
+  for (const o of joshPipelineAll) {
+    if (!JOSH_AB_SIGNED_STAGES.has(o.pipelineStageId || "")) continue;
+    const cid = o.contactId || o.id || "";
+    if (cid && abSignedSeen.has(cid)) continue;
+    if (cid) abSignedSeen.add(cid);
+    const d = new Date(o.lastStageChangeAt).getTime();
+    if (d < JAN1_2026) continue;
+    const src = o.contactId ? await getContactSource(o.contactId) : o.source;
+    opps.push({
+      date: d,
+      category: "ab_signed",
+      closer: "Josh",
+      name: o.name,
+      source: src,
+      monetaryValue: o.monetaryValue || 0,
+    });
+  }
+
+  // TC pipeline ab_signed (paginated) — skips deals already counted via closer pipeline
   let tcNextUrl: string | null = `${BASE}/opportunities/search?location_id=${LOCATION_ID()}&pipeline_id=${TC_PIPELINE}&limit=100`;
   for (let page = 0; page < 25 && tcNextUrl; page++) {
     const tcRes: Response = await fetch(tcNextUrl, { headers: getHeaders() });
     if (!tcRes.ok) break;
     const tcData = await tcRes.json();
     for (const o of tcData.opportunities || []) {
+      const cid = o.contactId || o.id || "";
+      if (cid && abSignedSeen.has(cid)) continue;
+      if (cid) abSignedSeen.add(cid);
       const d = new Date(o.createdAt).getTime();
       if (d >= JAN1_2026) {
         const src = o.contactId
