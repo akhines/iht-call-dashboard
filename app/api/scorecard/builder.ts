@@ -227,6 +227,26 @@ interface SourceBreakdown {
   [source: string]: number;
 }
 
+// Per-month split for cross-month boundary weeks (e.g. 3/30–4/5 with a deal
+// closed 4/3). Keyed by month-name (lowercase) → metrics.
+//
+// Only the metrics that have authoritative per-event dates are split:
+//   • settled / grossProfit  (closingDate custom field on the opp)
+//   • abSigned               (lastStageChangeAt on the opp)
+//   • inPersonOffers / virtualOffers (lastStageChangeAt on the opp)
+//
+// Call/lead/appt counts stay bucketed by week-start since their per-day
+// breakdown isn't surfaced here. The page reads `monthSplits` when present
+// and falls back to the week-level aggregate otherwise.
+export interface MonthSplit {
+  settled: number;
+  grossProfit: number;
+  abSigned: number;
+  inPersonOffers: number;
+  virtualOffers: number;
+}
+export type MonthSplits = Record<string, MonthSplit>;
+
 export interface WeekData {
   startDate: string;
   endDate: string;
@@ -268,6 +288,10 @@ export interface WeekData {
   joshOffers: number;
   joshSigned: number;
   joshSettled: number;
+  // Only present when the week crosses a month boundary (e.g. 3/30–4/5).
+  // Keyed by lowercase month-name; metrics are split by each event's
+  // actual date. Page consumes this in monthlySummaries.
+  monthSplits?: MonthSplits;
 }
 
 export interface ScorecardData {
@@ -923,6 +947,50 @@ export async function buildFreshScorecard(): Promise<ScorecardData> {
     const mikeAppts = weekAppts.filter((a) => a.closer === "Mike" && !a.cancelled).length;
     const joshAppts = weekAppts.filter((a) => a.closer === "Josh" && !a.cancelled).length;
 
+    // Cross-month boundary detection — when a week's start month differs from
+    // its end month, partition the date-anchored metrics (settled / grossProfit /
+    // abSigned / offers) by each event's actual month. Page uses this in
+    // monthlySummaries so e.g. a deal closed 4/3 in week 3/30–4/5 lands in
+    // April, not March.
+    const startMonthIdx = w.start.getUTCMonth();
+    const endMonthIdx = w.end.getUTCMonth();
+    let monthSplits: MonthSplits | undefined;
+    if (startMonthIdx !== endMonthIdx) {
+      const splits: MonthSplits = {};
+      const ensure = (m: string): MonthSplit => {
+        if (!splits[m]) {
+          splits[m] = {
+            settled: 0,
+            grossProfit: 0,
+            abSigned: 0,
+            inPersonOffers: 0,
+            virtualOffers: 0,
+          };
+        }
+        return splits[m];
+      };
+      const monthNameOf = (ms: number): string =>
+        new Date(ms).toLocaleString("en-US", {
+          month: "long",
+          timeZone: "UTC",
+        }).toLowerCase();
+      for (const o of weekOpps) {
+        const mName = monthNameOf(o.date);
+        const bucket = ensure(mName);
+        if (o.category === "settled") {
+          bucket.settled += 1;
+          bucket.grossProfit += o.monetaryValue || 0;
+        } else if (o.category === "ab_signed") {
+          bucket.abSigned += 1;
+        } else if (o.category === "offer_mike") {
+          bucket.inPersonOffers += 1;
+        } else if (o.category === "offer_josh") {
+          bucket.virtualOffers += 1;
+        }
+      }
+      monthSplits = splits;
+    }
+
     return {
       startDate: w.start.toISOString().slice(0, 10),
       endDate: w.end.toISOString().slice(0, 10),
@@ -985,6 +1053,7 @@ export async function buildFreshScorecard(): Promise<ScorecardData> {
       joshSettled: weekOpps.filter(
         (o) => o.category === "settled" && o.closer === "Josh"
       ).length,
+      monthSplits,
     };
   });
 

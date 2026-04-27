@@ -470,11 +470,33 @@ interface ChannelWeekData {
   mailersSent: number;
 }
 
+// Per-month split for a single channel, used on cross-month boundary weeks.
+// Only the date-anchored metrics (leads/appts/ab/closings/settled/grossProfit)
+// can be split — spend/mailersSent come from manual_inputs/sheet at week
+// level so they can't be partitioned without per-day allocation.
+export interface ChannelMonthSplit {
+  leads: number;
+  appts: number;
+  ab: number;
+  closings: number;
+  settled: number;
+  grossProfit: number;
+}
+// monthSplits[channelName][lowercaseMonthName] = ChannelMonthSplit.
+// Only present on weeks where w.start.getUTCMonth() !== w.end.getUTCMonth().
+export type MarketingMonthSplits = Record<
+  string,
+  Record<string, ChannelMonthSplit>
+>;
+
 export interface MarketingWeekData {
   weekKey: string;
   startDate: string;
   endDate: string;
   channels: Record<string, ChannelWeekData>;
+  // Cross-month boundary weeks only — keeps MTD KPIs accurate when a deal
+  // closes early in the next month within a week that spans both.
+  monthSplits?: MarketingMonthSplits;
 }
 
 export interface MarketingData {
@@ -518,8 +540,31 @@ function buildWeekData(
   // /api/marketing was reporting 205 (all sellers) vs scorecard's 191
   // (sellers with address). Filtering here keeps both surfaces aligned.
   const addressableLeads = allLeads.filter((l) => l.hasAddress);
+  const monthNameOf = (ms: number): string =>
+    new Date(ms)
+      .toLocaleString("en-US", { month: "long", timeZone: "UTC" })
+      .toLowerCase();
   return weeks.map((w) => {
     const channels: Record<string, ChannelWeekData> = {};
+    const crossesMonth = w.start.getUTCMonth() !== w.end.getUTCMonth();
+    const monthSplits: MarketingMonthSplits = {};
+    const ensureChannelMonth = (
+      ch: string,
+      monthName: string
+    ): ChannelMonthSplit => {
+      if (!monthSplits[ch]) monthSplits[ch] = {};
+      if (!monthSplits[ch][monthName]) {
+        monthSplits[ch][monthName] = {
+          leads: 0,
+          appts: 0,
+          ab: 0,
+          closings: 0,
+          settled: 0,
+          grossProfit: 0,
+        };
+      }
+      return monthSplits[ch][monthName];
+    };
     for (const ch of CHANNELS) {
       const weekLeads = addressableLeads.filter(
         (l) => l.channel === ch && findWeekKey(new Date(l.date), weeks) === w.key
@@ -560,12 +605,34 @@ function buildWeekData(
         spend: 0,
         mailersSent: 0,
       };
+
+      if (crossesMonth) {
+        // Bucket every event into its own month for the boundary week.
+        for (const l of weekLeads) {
+          ensureChannelMonth(ch, monthNameOf(l.date)).leads += 1;
+        }
+        for (const a of weekAppts) {
+          ensureChannelMonth(ch, monthNameOf(a.date)).appts += 1;
+        }
+        for (const d of weekAb) {
+          ensureChannelMonth(ch, monthNameOf(d.date)).ab += 1;
+        }
+        for (const d of weekClosings) {
+          ensureChannelMonth(ch, monthNameOf(d.date)).closings += 1;
+        }
+        for (const d of weekSettled) {
+          const bucket = ensureChannelMonth(ch, monthNameOf(d.date));
+          bucket.settled += 1;
+          bucket.grossProfit += d.monetaryValue || 0;
+        }
+      }
     }
     return {
       weekKey: w.key,
       startDate: w.start.toISOString().slice(0, 10),
       endDate: w.end.toISOString().slice(0, 10),
       channels,
+      monthSplits: crossesMonth ? monthSplits : undefined,
     };
   });
 }

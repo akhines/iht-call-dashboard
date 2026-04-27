@@ -13,11 +13,23 @@ interface ChannelWeekData {
   mailersSent: number;
 }
 
+interface ChannelMonthSplit {
+  leads: number;
+  appts: number;
+  ab: number;
+  closings: number;
+  settled: number;
+  grossProfit: number;
+}
+type MarketingMonthSplits = Record<string, Record<string, ChannelMonthSplit>>;
+
 interface MarketingWeekData {
   weekKey: string;
   startDate: string;
   endDate: string;
   channels: Record<string, ChannelWeekData>;
+  // Cross-month boundary weeks only — see api/marketing/builder.ts.
+  monthSplits?: MarketingMonthSplits;
 }
 
 const CHANNEL_COLORS: Record<string, string> = {
@@ -317,6 +329,13 @@ export default function MarketingPage() {
     let prevMonthLeads = 0;
     let mtdContracts = 0;
 
+    const MONTHS_LOWER = [
+      "january", "february", "march", "april", "may", "june",
+      "july", "august", "september", "october", "november", "december",
+    ];
+    const curMonthName = MONTHS_LOWER[curM];
+    const prevMonthName = MONTHS_LOWER[prevM];
+
     for (const w of weeks) {
       // weekKey/startDate is YYYY-MM-DD; parse without TZ shift
       const parts = (w.startDate || w.weekKey || "").split("-");
@@ -324,18 +343,54 @@ export default function MarketingPage() {
       const wy = parseInt(parts[0], 10);
       const wm = parseInt(parts[1], 10) - 1; // 0-indexed
       if (!isFinite(wy) || !isFinite(wm)) continue;
-      const inCur = wy === curY && wm === curM;
-      const inPrev = wy === prevY && wm === prevM;
+
+      // Parse end date too — if the week straddles the current/prev month
+      // boundary we'll consume monthSplits for accurate MTD attribution.
+      const endParts = (w.endDate || "").split("-");
+      const ey = endParts.length === 3 ? parseInt(endParts[0], 10) : wy;
+      const em = endParts.length === 3 ? parseInt(endParts[1], 10) - 1 : wm;
+      const crossesMonth = isFinite(em) && (wy !== ey || wm !== em);
+      const splits = w.monthSplits;
+
+      // Helper — does any month in [start, end] match the target year+month?
+      const weekTouches = (y: number, m: number): boolean => {
+        if (!isFinite(em)) return wy === y && wm === m;
+        if (wy === y && wm === m) return true;
+        if (ey === y && em === m) return true;
+        return false;
+      };
+
+      const inCur = weekTouches(curY, curM);
+      const inPrev = weekTouches(prevY, prevM);
       if (!inCur && !inPrev) continue;
+
       for (const ch of Object.keys(w.channels || {})) {
         const d = w.channels[ch];
         if (!d) continue;
-        if (inCur) {
-          mtdLeads += d.leads || 0;
-          mtdContracts += d.ab || 0;
-        }
-        if (inPrev) {
-          prevMonthLeads += d.leads || 0;
+        if (crossesMonth && splits && splits[ch]) {
+          // Use per-month split values when available.
+          if (inCur) {
+            const split = splits[ch][curMonthName];
+            if (split) {
+              mtdLeads += split.leads || 0;
+              mtdContracts += split.ab || 0;
+            }
+          }
+          if (inPrev) {
+            const split = splits[ch][prevMonthName];
+            if (split) {
+              prevMonthLeads += split.leads || 0;
+            }
+          }
+        } else {
+          // Intra-month week: bucket whole-week into the start-month.
+          if (inCur && wy === curY && wm === curM) {
+            mtdLeads += d.leads || 0;
+            mtdContracts += d.ab || 0;
+          }
+          if (inPrev && wy === prevY && wm === prevM) {
+            prevMonthLeads += d.leads || 0;
+          }
         }
       }
     }

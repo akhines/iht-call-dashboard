@@ -12,6 +12,25 @@ let cachedRefreshedAt = "";
 
 interface SourceBreakdown { [source: string]: number; }
 
+interface MonthSplit {
+  settled: number;
+  grossProfit: number;
+  abSigned: number;
+  inPersonOffers: number;
+  virtualOffers: number;
+}
+type MonthSplits = Record<string, MonthSplit>;
+
+// Metrics that get re-attributed by each event's actual date when a week
+// straddles a month boundary. Everything else stays bucketed by week-start.
+const MONTH_SPLIT_KEYS = [
+  "settled",
+  "grossProfit",
+  "abSigned",
+  "inPersonOffers",
+  "virtualOffers",
+] as const;
+
 interface WeekData {
   startDate: string;
   endDate: string;
@@ -47,6 +66,10 @@ interface WeekData {
   settledBySource: SourceBreakdown;
   mikeAppts: number; mikeOffers: number; mikeSigned: number; mikeSettled: number;
   joshAppts: number; joshOffers: number; joshSigned: number; joshSettled: number;
+  // Cross-month boundary weeks carry per-month splits for the date-anchored
+  // metrics so e.g. a deal closed 4/3 in week 3/30–4/5 lands in April, not
+  // March. Set by the scorecard builder; absent on intra-month weeks.
+  monthSplits?: MonthSplits;
 }
 
 type ColFmt = (v: number | string) => string;
@@ -250,11 +273,77 @@ export default function ScorecardPage() {
     }
   }
 
-  // Monthly/Quarterly summaries
+  // Monthly summaries — bucket each week into its start month, BUT when a
+  // week crosses a month boundary (carries `monthSplits`), partition the
+  // date-anchored metrics by their actual close/sign date so e.g. a deal
+  // closed 4/3 in week 3/30–4/5 lands in April, not March.
+  //
+  // Mechanism: for every cross-boundary week we contribute (a) a copy with
+  // start-month split metrics to its start-month bucket and (b) a "ghost"
+  // copy with end-month split metrics + everything else zeroed to its
+  // end-month bucket. That way `buildSummaryRow`'s `sumField` over each
+  // bucket totals correctly without double-counting.
   const monthlySummaries = useMemo(() => {
     const byMonth: Record<number, WeekData[]> = {};
-    weeks.forEach((w) => { const m = new Date(w.startDate + "T00:00:00").getMonth(); if (!byMonth[m]) byMonth[m] = []; byMonth[m].push(w); });
-    return Object.entries(byMonth).map(([m, ws]) => ({ label: MONTHS[parseInt(m)], ...buildSummaryRow(MONTHS[parseInt(m)], ws) }));
+    const monthIdxFromName = (name: string): number =>
+      MONTHS.findIndex((m) => m.toLowerCase() === name.toLowerCase());
+    const zeroSplit = (): MonthSplit => ({
+      settled: 0,
+      grossProfit: 0,
+      abSigned: 0,
+      inPersonOffers: 0,
+      virtualOffers: 0,
+    });
+    weeks.forEach((w) => {
+      const startIdx = new Date(w.startDate + "T00:00:00").getMonth();
+      const splits = w.monthSplits;
+      if (!splits) {
+        if (!byMonth[startIdx]) byMonth[startIdx] = [];
+        byMonth[startIdx].push(w);
+        return;
+      }
+      // Cross-month week. Build per-month contributions.
+      // Start-month copy: keep all non-split metrics intact, override split
+      // metrics with the start-month's portion (zero if not present).
+      const startMonthName = MONTHS[startIdx].toLowerCase();
+      const startSplit = splits[startMonthName] || zeroSplit();
+      const startCopy: WeekData = { ...w };
+      for (const k of MONTH_SPLIT_KEYS) {
+        (startCopy as unknown as Record<string, number>)[k] = startSplit[k];
+      }
+      // Drop monthSplits on the copies so downstream code can't loop.
+      delete startCopy.monthSplits;
+      if (!byMonth[startIdx]) byMonth[startIdx] = [];
+      byMonth[startIdx].push(startCopy);
+
+      // For every other month present in splits, push a ghost week containing
+      // ONLY that month's split metrics — everything else zeroed so it
+      // doesn't double-count call/lead/appt totals.
+      for (const monthName of Object.keys(splits)) {
+        if (monthName === startMonthName) continue;
+        const otherIdx = monthIdxFromName(monthName);
+        if (otherIdx < 0) continue;
+        const split = splits[monthName] || zeroSplit();
+        // Build a ghost week from the original shape with all numeric fields
+        // zeroed, then overlay the split metrics for this month.
+        const ghost: Record<string, number | string | SourceBreakdown | MonthSplits | undefined> = {};
+        for (const key of Object.keys(w)) {
+          const val = (w as unknown as Record<string, unknown>)[key];
+          if (typeof val === "number") ghost[key] = 0;
+          else if (typeof val === "string") ghost[key] = val;
+          else ghost[key] = undefined;
+        }
+        for (const k of MONTH_SPLIT_KEYS) {
+          ghost[k] = split[k];
+        }
+        delete ghost.monthSplits;
+        if (!byMonth[otherIdx]) byMonth[otherIdx] = [];
+        byMonth[otherIdx].push(ghost as unknown as WeekData);
+      }
+    });
+    return Object.entries(byMonth)
+      .sort(([a], [b]) => parseInt(a) - parseInt(b))
+      .map(([m, ws]) => ({ label: MONTHS[parseInt(m)], ...buildSummaryRow(MONTHS[parseInt(m)], ws) }));
   }, [weeks]);
 
   const q1Summary = useMemo(() => {
