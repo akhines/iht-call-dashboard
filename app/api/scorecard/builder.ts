@@ -38,6 +38,113 @@ const MARKETING_CAMPAIGN_FIELD = "4fOhwf1m5nhK1c9vI6SJ";
 
 const JAN1_2026 = new Date("2026-01-01T00:00:00Z").getTime();
 
+// ============ CLOSER USER ID DISCOVERY ============
+// Module-level cache so we only hit /users/search once per cold start.
+let mikeUserId: string | null = null;
+let joshUserId: string | null = null;
+let userIdsDiscovered = false;
+
+async function discoverCloserUserIds(): Promise<void> {
+  if (userIdsDiscovered) return;
+  userIdsDiscovered = true;
+  try {
+    const url = `${BASE}/users/search?locationId=${LOCATION_ID()}&limit=100`;
+    const res = await fetch(url, { headers: getHeaders() });
+    if (!res.ok) {
+      console.warn(
+        `[Scorecard] /users/search failed (${res.status}); falling back to pipeline-membership for closer attribution`
+      );
+      return;
+    }
+    const data = await res.json();
+    const users = data.users || [];
+    console.log(
+      `[Scorecard] /users/search returned ${users.length} users; sample:`,
+      JSON.stringify(
+        users.slice(0, 5).map((u: { id: string; firstName?: string; lastName?: string; name?: string }) => ({
+          id: u.id,
+          firstName: u.firstName,
+          lastName: u.lastName,
+          name: u.name,
+        }))
+      )
+    );
+    for (const u of users) {
+      const fn = (u.firstName || "").trim();
+      const ln = (u.lastName || "").trim();
+      if (
+        !mikeUserId &&
+        (fn === "Mike" || fn === "Michael") &&
+        ln.toLowerCase().startsWith("aubele")
+      ) {
+        mikeUserId = u.id;
+      } else if (!mikeUserId && (fn === "Mike" || fn === "Michael")) {
+        // fallback: first Mike/Michael if no Aubele match yet
+        mikeUserId = u.id;
+      }
+      if (!joshUserId && fn === "Josh") {
+        joshUserId = u.id;
+      }
+    }
+    console.log(
+      "[Scorecard] Discovered user IDs — Mike:",
+      mikeUserId,
+      "Josh:",
+      joshUserId
+    );
+    if (!mikeUserId)
+      console.warn(
+        "[Scorecard] WARNING: Could not find Mike's user ID; falling back to pipeline-membership for Mike attribution"
+      );
+    if (!joshUserId)
+      console.warn(
+        "[Scorecard] WARNING: Could not find Josh's user ID; falling back to pipeline-membership for Josh attribution"
+      );
+  } catch (e) {
+    console.warn("[Scorecard] Closer user-ID discovery threw:", e);
+  }
+}
+
+// ============ STAGE DISCOVERY (logging only) ============
+async function logClosingLikeStages(): Promise<void> {
+  try {
+    const res = await fetch(
+      `${BASE}/opportunities/pipelines?locationId=${LOCATION_ID()}`,
+      { headers: getHeaders() }
+    );
+    if (!res.ok) {
+      console.warn(`[Scorecard] /opportunities/pipelines failed (${res.status})`);
+      return;
+    }
+    const data = await res.json();
+    const pipelines = data.pipelines || [];
+    const known = new Set<string>([
+      STAGES.dealsClosedDeal,
+      STAGES.tcClosedDispo,
+    ]);
+    const closingLike: { pipeline: string; stage: string; id: string; known: boolean }[] = [];
+    const re = /closed|won|funded|settled/i;
+    for (const p of pipelines) {
+      for (const s of p.stages || []) {
+        if (re.test(s.name || "")) {
+          closingLike.push({
+            pipeline: p.name,
+            stage: s.name,
+            id: s.id,
+            known: known.has(s.id),
+          });
+        }
+      }
+    }
+    console.log(
+      "[Scorecard] Closing-like stages discovered:",
+      JSON.stringify(closingLike, null, 2)
+    );
+  } catch (e) {
+    console.warn("[Scorecard] Stage discovery threw:", e);
+  }
+}
+
 // ============ WEEK HELPERS ============
 
 interface Week {
@@ -297,6 +404,7 @@ interface OppSearchResult {
   name: string;
   source: string;
   contactId: string;
+  assignedTo: string;
   lastStageChangeAt: string;
   createdAt: string;
   monetaryValue: number;
@@ -317,6 +425,7 @@ async function fetchOppsByStage(
       name: o.name || "",
       source: o.source || "",
       contactId: o.contactId || "",
+      assignedTo: o.assignedTo || "",
       lastStageChangeAt: o.lastStageChangeAt,
       createdAt: o.createdAt,
       monetaryValue: o.monetaryValue || 0,
@@ -328,12 +437,35 @@ async function fetchOppsByStage(
 async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
   const opps: OppRecord[] = [];
 
-  const [mikeOffers, joshOffers, bcAssigned, closedDeals] = await Promise.all([
-    fetchOppsByStage(MIKE_PIPELINE, STAGES.mikeOfferMade),
-    fetchOppsByStage(JOSH_PIPELINE, STAGES.joshOffered),
-    fetchOppsByStage(TC_PIPELINE, STAGES.tcBcAssigned),
-    fetchOppsByStage(DEALS_PIPELINE, STAGES.dealsClosedDeal),
-  ]);
+  // Discover closer user IDs + log any closing-like stages we don't already track.
+  await Promise.all([discoverCloserUserIds(), logClosingLikeStages()]);
+
+  const [mikeOffers, joshOffers, bcAssigned, closedDealsA, closedDealsB] =
+    await Promise.all([
+      fetchOppsByStage(MIKE_PIPELINE, STAGES.mikeOfferMade),
+      fetchOppsByStage(JOSH_PIPELINE, STAGES.joshOffered),
+      fetchOppsByStage(TC_PIPELINE, STAGES.tcBcAssigned),
+      fetchOppsByStage(DEALS_PIPELINE, STAGES.dealsClosedDeal),
+      fetchOppsByStage(TC_PIPELINE, STAGES.tcClosedDispo),
+    ]);
+
+  // Merge closings, dedupe by opp id (a deal could in theory live in both stages).
+  const closedById = new Map<string, OppSearchResult>();
+  for (const o of [...closedDealsA, ...closedDealsB]) {
+    if (o.id && !closedById.has(o.id)) closedById.set(o.id, o);
+  }
+  const closedDeals = Array.from(closedById.values());
+  console.log(
+    `[Scorecard] Closings: dealsClosedDeal=${closedDealsA.length}, tcClosedDispo=${closedDealsB.length}, merged=${closedDeals.length}`
+  );
+
+  // Helper: resolve closer for a TC/deals opp using assignedTo, with pipeline-membership fallback.
+  const resolveCloser = (o: { contactId?: string; assignedTo?: string }): "Mike" | "Josh" => {
+    const assignedTo = o.assignedTo || "";
+    if (mikeUserId && assignedTo === mikeUserId) return "Mike";
+    if (joshUserId && assignedTo === joshUserId) return "Josh";
+    return mikeOffers.some((m) => m.contactId === o.contactId) ? "Mike" : "Josh";
+  };
 
   for (const o of mikeOffers) {
     const d = new Date(o.lastStageChangeAt).getTime();
@@ -373,11 +505,14 @@ async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
         const src = o.contactId
           ? await getContactSource(o.contactId)
           : o.source || "";
-        const isMike = mikeOffers.some((m) => m.contactId === o.contactId);
+        const closer = resolveCloser({
+          contactId: o.contactId,
+          assignedTo: o.assignedTo || "",
+        });
         opps.push({
           date: d,
           category: "ab_signed",
-          closer: isMike ? "Mike" : "Josh",
+          closer,
           name: o.name || "",
           source: src,
           monetaryValue: o.monetaryValue || 0,
@@ -390,19 +525,19 @@ async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
   for (const o of bcAssigned) {
     const d = new Date(o.lastStageChangeAt).getTime();
     const src = o.contactId ? await getContactSource(o.contactId) : o.source;
-    const isMike = mikeOffers.some((m) => m.contactId === o.contactId);
+    const closer = resolveCloser(o);
     if (d >= JAN1_2026)
       opps.push({
         date: d,
         category: "bc_signed",
-        closer: isMike ? "Mike" : "Josh",
+        closer,
         name: o.name,
         source: src,
         monetaryValue: 0,
       });
   }
 
-  // Settled
+  // Settled (merge of dealsClosedDeal + tcClosedDispo, deduped above)
   const CLOSING_DATE_FIELD = "bbDP5pNJ96IMth9bQfh8";
   for (const o of closedDeals) {
     const detailRes = await fetch(`${BASE}/opportunities/${o.id}`, {
@@ -421,11 +556,15 @@ async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
     const d = new Date(closingDate).getTime();
     if (d < JAN1_2026) continue;
     const src = o.contactId ? await getContactSource(o.contactId) : o.source;
-    const isMike = mikeOffers.some((m) => m.contactId === o.contactId);
+    // Prefer assignedTo from detail (more authoritative) but fall back to search result.
+    const closer = resolveCloser({
+      contactId: o.contactId,
+      assignedTo: opp.assignedTo || o.assignedTo || "",
+    });
     opps.push({
       date: d,
       category: "settled",
-      closer: isMike ? "Mike" : "Josh",
+      closer,
       name: o.name,
       source: src,
       monetaryValue: opp.monetaryValue || 0,
