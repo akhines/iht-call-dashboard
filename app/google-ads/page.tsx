@@ -3,10 +3,10 @@
 import { useState } from "react";
 
 const PAGES = [
-  { id: "FumBB", label: "Overview" },
-  { id: "vlmBB", label: "Campaigns" },
-  { id: "MkmBB", label: "Keywords" },
-  { id: "ZrmBB", label: "Audiences" },
+  { id: "FumBB", label: "1" },
+  { id: "vlmBB", label: "2" },
+  { id: "MkmBB", label: "3" },
+  { id: "ZrmBB", label: "4" },
 ];
 
 export default function GoogleAdsPage() {
