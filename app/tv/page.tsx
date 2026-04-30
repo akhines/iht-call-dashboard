@@ -235,12 +235,16 @@ export default function TvPage() {
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch(`${BCDI_API}/api/tv/marketing-funnel`, { cache: "no-store" });
-        if (!r.ok) return;
+        // Same-origin proxy → /api/tv/marketing-funnel forwards to bcdi-api server-side
+        const r = await fetch(`/api/tv/marketing-funnel`, { cache: "no-store" });
+        if (!r.ok) {
+          console.warn("[tv funnel] HTTP", r.status, await r.text().catch(() => ""));
+          return;
+        }
         const json = (await r.json()) as MarketingFunnelPayload;
         if (!cancelled) setFunnel(json);
-      } catch {
-        // non-fatal — daypart heatmap still renders airing-side data
+      } catch (err) {
+        console.warn("[tv funnel] fetch failed:", err);
       }
     })();
     return () => { cancelled = true; };
