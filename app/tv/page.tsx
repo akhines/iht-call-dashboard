@@ -713,7 +713,7 @@ export default function TvPage() {
                 )}
               </div>
               <p className="text-[10px] text-gray-500 mt-2">
-                Leads/Appts/Contracts/Closings sourced from GHL Marketing Campaign = "TV AD". Bucketed by ET daypart on first inbound (calls/SMS/form). Leads = contact created-at; downstream metrics = first-inbound timestamp.
+                Leads/Appts/Contracts/Closings sourced from GHL Marketing Campaign = &quot;TV AD&quot;. Bucketed by ET daypart on first inbound (calls/SMS/form). Leads = contact created-at; downstream metrics = first-inbound timestamp.
               </p>
             </section>
 
@@ -726,7 +726,7 @@ export default function TvPage() {
                 <div className="bg-white rounded-xl shadow-sm border border-emerald-100 overflow-hidden">
                   <div className="px-4 py-3 bg-emerald-50/50 border-b border-emerald-100 flex items-center justify-between flex-wrap gap-2">
                     <div className="text-xs text-emerald-900">
-                      <strong>{funnel["TV Website"].totalContacts}</strong> contacts attributed via Marketing Campaign = "TV Website"
+                      <strong>{funnel["TV Website"].totalContacts}</strong> contacts attributed via Marketing Campaign = &quot;TV Website&quot;
                     </div>
                     <div className="text-[11px] font-mono text-emerald-700">
                       {Object.values(funnel["TV Website"].leadsByDaypart).reduce((a, b) => a + b, 0)} leads ·{" "}
@@ -766,7 +766,7 @@ export default function TvPage() {
                   </table>
                 </div>
                 <p className="text-[10px] text-gray-500 mt-2">
-                  TV Website is the form-fill funnel driven by TV ad creative. No broadcast spots — leads come in via the website. Closings count is forward-looking (Marketing Campaign field added 2025-03-14, so older closings without the field aren't included).
+                  TV Website is the form-fill funnel driven by TV ad creative. No broadcast spots — leads come in via the website. Closings count is forward-looking (Marketing Campaign field added 2025-03-14, so older closings without the field aren&apos;t included).
                 </p>
               </section>
             )}
