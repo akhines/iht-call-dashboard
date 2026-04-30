@@ -23,8 +23,23 @@ interface DaypartRow {
   costPerCall: number;
 }
 
+interface FunnelSegment {
+  totalContacts: number;
+  leadsByDaypart: Record<string, number>;
+  apptsByDaypart: Record<string, number>;
+  contractsByDaypart: Record<string, number>;
+  closingsByDaypart: Record<string, number>;
+}
+
+interface MarketingFunnelPayload {
+  generatedAt: string;
+  "TV Website": FunnelSegment;
+  "TV AD": FunnelSegment;
+}
+
 interface ProgramRow {
   program: string;
+  station: string | null;
   spots: number;
   spend: number;
   calls: number;
@@ -42,10 +57,32 @@ interface RecentAiringRow {
   calls: number;
 }
 
+interface MonthlyBreakdownRow {
+  billingMonth: string;
+  monthLabel: string;
+  spots: number;
+  spend: number;
+  mediaSpend: number;
+  agencyFees: number;
+  calls: number;
+  costPerCall: number;
+}
+
+interface CommercialRow {
+  copyCode: string;
+  firstSeen: string;
+  lastSeen: string;
+  daysRunning: number;
+  totalSpots: number;
+  stations: string[];
+}
+
 interface TvPayload {
   summary: {
     totalSpots: number;
     totalSpend: number;
+    mediaSpend: number;
+    agencyFees: number;
     totalCalls: number;
     costPerCall: number;
     monthLabel: string;
@@ -56,6 +93,14 @@ interface TvPayload {
   programs: ProgramRow[];
   recentAirings: RecentAiringRow[];
   monthsAvailable: string[];
+  totalTvCalls: number;
+  unmatchedCalls: number;
+  callsByChannel: Record<string, number>;
+  callsByDaypart: Record<string, number>;
+  callsByProgram: { programName: string; station: string | null; calls: number }[];
+  monthlyBreakdown: MonthlyBreakdownRow[];
+  currentCommercial: CommercialRow | null;
+  commercials: CommercialRow[];
 }
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────
@@ -109,14 +154,19 @@ const MONTH_NAMES: Record<string, string> = {
   jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12",
 };
 function monthLabelToYM(label: string): string {
-  const m = label.trim().match(/^([A-Za-z]+)\s+(\d{4})/);
+  const trimmed = label.trim();
+  const ytd = trimmed.match(/^YTD\s+(\d{4})/i);
+  if (ytd) return `${ytd[1]}-ytd`;
+  const m = trimmed.match(/^([A-Za-z]+)\s+(\d{4})/);
   if (!m) return "";
   const num = MONTH_NAMES[m[1].slice(0, 3).toLowerCase()];
   return num ? `${m[2]}-${num}` : "";
 }
 
 function fmtMonthInput(billingMonth: string): string {
-  // YYYY-MM → "Feb 2026" using en-US locale.
+  // YYYY-MM → "Feb 2026". Special: "YYYY-ytd" → "YTD YYYY".
+  const ytd = /^(\d{4})-ytd$/i.exec(billingMonth);
+  if (ytd) return `YTD ${ytd[1]}`;
   if (!/^\d{4}-\d{2}$/.test(billingMonth)) return billingMonth;
   const [y, m] = billingMonth.split("-").map((x) => parseInt(x, 10));
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -139,10 +189,14 @@ const TVIcon = () => (
 // ─── PAGE ─────────────────────────────────────────────────────────────────
 export default function TvPage() {
   const [data, setData] = useState<TvPayload | null>(null);
+  const [funnel, setFunnel] = useState<MarketingFunnelPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [selectedMonth, setSelectedMonth] = useState<string>("");
+  const [selectedMonth, setSelectedMonth] = useState<string>(() => {
+    const y = new Date().getUTCFullYear();
+    return `${y}-ytd`;
+  });
   const [uploading, setUploading] = useState(false);
   const [uploadMsg, setUploadMsg] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -176,6 +230,21 @@ export default function TvPage() {
   useEffect(() => {
     fetchData(selectedMonth || undefined);
   }, [selectedMonth, fetchData]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`${BCDI_API}/api/tv/marketing-funnel`, { cache: "no-store" });
+        if (!r.ok) return;
+        const json = (await r.json()) as MarketingFunnelPayload;
+        if (!cancelled) setFunnel(json);
+      } catch {
+        // non-fatal — daypart heatmap still renders airing-side data
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   async function handleUpload(file: File) {
     setUploading(true);
@@ -350,13 +419,21 @@ export default function TvPage() {
                 onChange={(e) => setSelectedMonth(e.target.value)}
                 className="border border-gray-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/20"
               >
-                {data.monthsAvailable.length === 0 ? (
-                  <option value="">No data</option>
-                ) : (
-                  data.monthsAvailable.map((m) => (
-                    <option key={m} value={m}>{fmtMonthInput(m)}</option>
-                  ))
-                )}
+                {(() => {
+                  const ytdYear = new Date().getUTCFullYear();
+                  const ytdValue = `${ytdYear}-ytd`;
+                  return (
+                    <>
+                      <option value={ytdValue}>YTD {ytdYear}</option>
+                      {data.monthsAvailable.length > 0 && (
+                        <option disabled>──────────</option>
+                      )}
+                      {data.monthsAvailable.map((m) => (
+                        <option key={m} value={m}>{fmtMonthInput(m)}</option>
+                      ))}
+                    </>
+                  );
+                })()}
               </select>
             )}
             <button
@@ -422,13 +499,119 @@ export default function TvPage() {
               </h3>
               <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <KpiTile label="Total Spend" value={fmtMoney0(data.summary.totalSpend)} />
+                  <KpiTile label="Total Spend" value={fmtMoney0(data.summary.totalSpend)} sub={data.summary.agencyFees > 0 ? `${fmtMoney0(data.summary.mediaSpend)} media + ${fmtMoney0(data.summary.agencyFees)} fees` : undefined} />
                   <KpiTile label="Total Spots" value={data.summary.totalSpots.toLocaleString()} />
-                  <KpiTile label="Total Calls" value={data.summary.totalCalls.toLocaleString()} />
-                  <KpiTile label="Cost / Call" value={data.summary.totalCalls > 0 ? fmtMoney0(data.summary.costPerCall) : "—"} />
+                  <KpiTile label="Total TV Calls" value={data.totalTvCalls.toLocaleString()} />
+                  <KpiTile label="Cost / Call" value={data.totalTvCalls > 0 ? fmtMoney0(data.summary.totalSpend / data.totalTvCalls) : "—"} />
                 </div>
+                {data.unmatchedCalls > 0 && (
+                  <p className="mt-3 text-[11px] text-gray-500">
+                    +{data.unmatchedCalls} call{data.unmatchedCalls === 1 ? "" : "s"} flagged as TV but no airing within 30 min
+                  </p>
+                )}
               </div>
             </section>
+
+            {/* ─── CURRENT COMMERCIAL + RECENT CREATIVES ─── */}
+            {data.currentCommercial && (
+              <section>
+                <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-3">
+                  Current Commercial
+                </h3>
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                  <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 lg:col-span-1">
+                    <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Copy Code</p>
+                    <p className="text-2xl font-bold text-gray-900 mt-1 font-mono">{data.currentCommercial.copyCode}</p>
+                    <div className="grid grid-cols-2 gap-3 mt-4">
+                      <div>
+                        <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Days Running</p>
+                        <p className="text-xl font-bold text-gray-900 mt-0.5">{data.currentCommercial.daysRunning}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Total Spots</p>
+                        <p className="text-xl font-bold text-gray-900 mt-0.5">{data.currentCommercial.totalSpots.toLocaleString()}</p>
+                      </div>
+                      <div className="col-span-2">
+                        <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">First → Last Aired</p>
+                        <p className="text-sm font-medium text-gray-700 mt-0.5">{data.currentCommercial.firstSeen} → {data.currentCommercial.lastSeen}</p>
+                      </div>
+                      <div className="col-span-2">
+                        <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Stations</p>
+                        <p className="text-sm font-medium text-gray-700 mt-0.5">{data.currentCommercial.stations.join(", ") || "—"}</p>
+                      </div>
+                    </div>
+                  </div>
+                  {data.commercials.length > 1 && (
+                    <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 lg:col-span-2">
+                      <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold mb-3">Other Creatives in Rotation</p>
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="border-b border-gray-100">
+                            <th className="px-2 py-1.5 text-left font-semibold text-gray-600">Copy Code</th>
+                            <th className="px-2 py-1.5 text-right font-semibold text-gray-600">Spots</th>
+                            <th className="px-2 py-1.5 text-right font-semibold text-gray-600">Days</th>
+                            <th className="px-2 py-1.5 text-left font-semibold text-gray-600">Last Aired</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {data.commercials.slice(1).map((c) => (
+                            <tr key={c.copyCode} className="border-b border-gray-50">
+                              <td className="px-2 py-1.5 font-mono text-gray-900">{c.copyCode}</td>
+                              <td className="px-2 py-1.5 text-right text-gray-700">{c.totalSpots.toLocaleString()}</td>
+                              <td className="px-2 py-1.5 text-right text-gray-700">{c.daysRunning}</td>
+                              <td className="px-2 py-1.5 text-gray-700">{c.lastSeen}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </section>
+            )}
+
+            {/* ─── MONTHLY BREAKDOWN + CALLS TRENDLINE ─── */}
+            {data.monthlyBreakdown.length > 0 && (
+              <section>
+                <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-3">
+                  Monthly Breakdown
+                </h3>
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                  <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="bg-gray-50 border-b border-gray-100">
+                          <th className="px-3 py-2 text-left font-semibold text-gray-600 uppercase tracking-wider text-[11px]">Month</th>
+                          <th className="px-3 py-2 text-right font-semibold text-gray-600 uppercase tracking-wider text-[11px]">Spots</th>
+                          <th className="px-3 py-2 text-right font-semibold text-gray-600 uppercase tracking-wider text-[11px]">Media</th>
+                          <th className="px-3 py-2 text-right font-semibold text-gray-600 uppercase tracking-wider text-[11px]">Fees</th>
+                          <th className="px-3 py-2 text-right font-semibold text-gray-600 uppercase tracking-wider text-[11px]">Total</th>
+                          <th className="px-3 py-2 text-right font-semibold text-gray-600 uppercase tracking-wider text-[11px]">Calls</th>
+                          <th className="px-3 py-2 text-right font-semibold text-gray-600 uppercase tracking-wider text-[11px]">Cost / Call</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {data.monthlyBreakdown.map((m) => (
+                          <tr key={m.billingMonth} className="border-b border-gray-50">
+                            <td className="px-3 py-2 font-medium text-gray-900">{m.monthLabel}</td>
+                            <td className="px-3 py-2 text-right">{m.spots.toLocaleString()}</td>
+                            <td className="px-3 py-2 text-right text-gray-600">{fmtMoney0(m.mediaSpend)}</td>
+                            <td className="px-3 py-2 text-right text-gray-600">{m.agencyFees > 0 ? fmtMoney0(m.agencyFees) : "—"}</td>
+                            <td className="px-3 py-2 text-right font-semibold">{fmtMoney0(m.spend)}</td>
+                            <td className="px-3 py-2 text-right">{m.calls.toLocaleString()}</td>
+                            <td className="px-3 py-2 text-right">{m.calls > 0 ? fmtMoney0(m.costPerCall) : "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+                    <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold mb-3">Calls — Month over Month</p>
+                    <CallsTrendline rows={data.monthlyBreakdown} />
+                  </div>
+                </div>
+              </section>
+            )}
 
             {/* ─── CHANNEL PERFORMANCE GRID ─── */}
             <section>
@@ -480,10 +663,10 @@ export default function TvPage() {
               </div>
             </section>
 
-            {/* ─── DAYPART HEATMAP ─── */}
+            {/* ─── DAYPART HEATMAP — TV AD broadcast (with funnel columns) ─── */}
             <section>
               <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-3">
-                Daypart Performance
+                Daypart Performance — TV AD (Broadcast)
               </h3>
               <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
                 <table className="w-full text-xs">
@@ -494,28 +677,99 @@ export default function TvPage() {
                       <th className="px-4 py-2 text-right font-semibold text-gray-600 uppercase tracking-wider text-[11px]">Spend</th>
                       <th className="px-4 py-2 text-right font-semibold text-gray-600 uppercase tracking-wider text-[11px]">Calls</th>
                       <th className="px-4 py-2 text-right font-semibold text-gray-600 uppercase tracking-wider text-[11px]">Cost / Call</th>
+                      <th className="px-4 py-2 text-right font-semibold text-gray-600 uppercase tracking-wider text-[11px]">Leads</th>
+                      <th className="px-4 py-2 text-right font-semibold text-gray-600 uppercase tracking-wider text-[11px]">Appts</th>
+                      <th className="px-4 py-2 text-right font-semibold text-gray-600 uppercase tracking-wider text-[11px]">Contracts</th>
+                      <th className="px-4 py-2 text-right font-semibold text-gray-600 uppercase tracking-wider text-[11px]">Closings</th>
                     </tr>
                   </thead>
                   <tbody>
                     {dayparts.map((d) => {
                       const cpc = d.calls > 0 ? d.spend / d.calls : 0;
                       const heat = heatColorForCpc(cpc);
+                      const fAd = funnel?.["TV AD"];
+                      const lead = fAd?.leadsByDaypart?.[d.daypart] || 0;
+                      const appt = fAd?.apptsByDaypart?.[d.daypart] || 0;
+                      const contract = fAd?.contractsByDaypart?.[d.daypart] || 0;
+                      const close = fAd?.closingsByDaypart?.[d.daypart] || 0;
                       return (
                         <tr key={d.daypart} className={`${heat} border-b border-gray-50`}>
                           <td className="px-4 py-2 font-medium text-gray-900">{DAYPART_LABEL[d.daypart] || d.daypart}</td>
                           <td className="px-4 py-2 text-right">{d.spots.toLocaleString()}</td>
                           <td className="px-4 py-2 text-right">{fmtMoney0(d.spend)}</td>
                           <td className="px-4 py-2 text-right">{d.calls.toLocaleString()}</td>
-                          <td className="px-4 py-2 text-right font-semibold">
-                            {d.calls > 0 ? fmtMoney0(cpc) : "—"}
-                          </td>
+                          <td className="px-4 py-2 text-right font-semibold">{d.calls > 0 ? fmtMoney0(cpc) : "—"}</td>
+                          <td className="px-4 py-2 text-right text-gray-700">{lead || "—"}</td>
+                          <td className="px-4 py-2 text-right text-gray-700">{appt || "—"}</td>
+                          <td className="px-4 py-2 text-right text-gray-700">{contract || "—"}</td>
+                          <td className={`px-4 py-2 text-right font-bold ${close > 0 ? "text-emerald-700" : "text-gray-400"}`}>{close || "—"}</td>
                         </tr>
                       );
                     })}
                   </tbody>
                 </table>
+                {!funnel && (
+                  <p className="px-4 py-2 text-[10px] text-gray-400 border-t border-gray-50">Funnel columns loading…</p>
+                )}
               </div>
+              <p className="text-[10px] text-gray-500 mt-2">
+                Leads/Appts/Contracts/Closings sourced from GHL Marketing Campaign = "TV AD". Bucketed by ET daypart on first inbound (calls/SMS/form). Leads = contact created-at; downstream metrics = first-inbound timestamp.
+              </p>
             </section>
+
+            {/* ─── TV WEBSITE FUNNEL (separate from broadcast spots) ─── */}
+            {funnel?.["TV Website"] && (
+              <section>
+                <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-3">
+                  TV Website — Lead → Closing Funnel
+                </h3>
+                <div className="bg-white rounded-xl shadow-sm border border-emerald-100 overflow-hidden">
+                  <div className="px-4 py-3 bg-emerald-50/50 border-b border-emerald-100 flex items-center justify-between flex-wrap gap-2">
+                    <div className="text-xs text-emerald-900">
+                      <strong>{funnel["TV Website"].totalContacts}</strong> contacts attributed via Marketing Campaign = "TV Website"
+                    </div>
+                    <div className="text-[11px] font-mono text-emerald-700">
+                      {Object.values(funnel["TV Website"].leadsByDaypart).reduce((a, b) => a + b, 0)} leads ·{" "}
+                      {Object.values(funnel["TV Website"].apptsByDaypart).reduce((a, b) => a + b, 0)} appts ·{" "}
+                      {Object.values(funnel["TV Website"].contractsByDaypart).reduce((a, b) => a + b, 0)} contracts ·{" "}
+                      <strong>{Object.values(funnel["TV Website"].closingsByDaypart).reduce((a, b) => a + b, 0)} closings</strong>
+                    </div>
+                  </div>
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="bg-gray-50 border-b border-gray-100">
+                        <th className="px-4 py-2 text-left font-semibold text-gray-600 uppercase tracking-wider text-[11px]">Daypart</th>
+                        <th className="px-4 py-2 text-right font-semibold text-gray-600 uppercase tracking-wider text-[11px]">Leads <span className="font-normal text-gray-400">(created at)</span></th>
+                        <th className="px-4 py-2 text-right font-semibold text-gray-600 uppercase tracking-wider text-[11px]">Appts</th>
+                        <th className="px-4 py-2 text-right font-semibold text-gray-600 uppercase tracking-wider text-[11px]">Contracts</th>
+                        <th className="px-4 py-2 text-right font-semibold text-gray-600 uppercase tracking-wider text-[11px]">Closings</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {DAYPART_ORDER.map((dp) => {
+                        const f = funnel["TV Website"];
+                        const lead = f.leadsByDaypart[dp] || 0;
+                        const appt = f.apptsByDaypart[dp] || 0;
+                        const contract = f.contractsByDaypart[dp] || 0;
+                        const close = f.closingsByDaypart[dp] || 0;
+                        return (
+                          <tr key={dp} className="border-b border-gray-50">
+                            <td className="px-4 py-2 font-medium text-gray-900">{DAYPART_LABEL[dp] || dp}</td>
+                            <td className="px-4 py-2 text-right">{lead || "—"}</td>
+                            <td className="px-4 py-2 text-right">{appt || "—"}</td>
+                            <td className="px-4 py-2 text-right">{contract || "—"}</td>
+                            <td className={`px-4 py-2 text-right font-bold ${close > 0 ? "text-emerald-700" : "text-gray-400"}`}>{close || "—"}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <p className="text-[10px] text-gray-500 mt-2">
+                  TV Website is the form-fill funnel driven by TV ad creative. No broadcast spots — leads come in via the website. Closings count is forward-looking (Marketing Campaign field added 2025-03-14, so older closings without the field aren't included).
+                </p>
+              </section>
+            )}
 
             {/* ─── PROGRAM PERFORMANCE ─── */}
             {data.programs.length > 0 && (
@@ -604,11 +858,66 @@ export default function TvPage() {
   );
 }
 
-function KpiTile({ label, value }: { label: string; value: string }) {
+function KpiTile({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div className="bg-gray-50 border border-gray-100 rounded-lg p-3">
       <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">{label}</p>
       <p className="text-lg font-bold text-gray-900 mt-1">{value}</p>
+      {sub && <p className="text-[10px] text-gray-500 mt-0.5">{sub}</p>}
     </div>
+  );
+}
+
+function CallsTrendline({ rows }: { rows: MonthlyBreakdownRow[] }) {
+  if (rows.length === 0) {
+    return <p className="text-xs text-gray-400">No data yet.</p>;
+  }
+  const W = 280;
+  const H = 110;
+  const PADL = 28;
+  const PADR = 10;
+  const PADT = 10;
+  const PADB = 22;
+  const innerW = W - PADL - PADR;
+  const innerH = H - PADT - PADB;
+  const max = Math.max(1, ...rows.map((r) => r.calls));
+  const xFor = (i: number) => PADL + (rows.length === 1 ? innerW / 2 : (i * innerW) / (rows.length - 1));
+  const yFor = (v: number) => PADT + innerH - (v / max) * innerH;
+  const linePath = rows
+    .map((r, i) => `${i === 0 ? "M" : "L"} ${xFor(i).toFixed(1)} ${yFor(r.calls).toFixed(1)}`)
+    .join(" ");
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto">
+      {/* y-axis tick: max */}
+      <text x={2} y={PADT + 4} fontSize="9" fill="#9ca3af">{max}</text>
+      <text x={2} y={PADT + innerH + 3} fontSize="9" fill="#9ca3af">0</text>
+      {/* line */}
+      <path d={linePath} fill="none" stroke="#3b82f6" strokeWidth="2" />
+      {/* dots + labels */}
+      {rows.map((r, i) => (
+        <g key={r.billingMonth}>
+          <circle cx={xFor(i)} cy={yFor(r.calls)} r={3.5} fill="#3b82f6" />
+          <text
+            x={xFor(i)}
+            y={yFor(r.calls) - 8}
+            fontSize="10"
+            fontWeight="600"
+            fill="#1f2937"
+            textAnchor="middle"
+          >
+            {r.calls}
+          </text>
+          <text
+            x={xFor(i)}
+            y={H - 6}
+            fontSize="9"
+            fill="#6b7280"
+            textAnchor="middle"
+          >
+            {r.monthLabel.split(" ")[0]}
+          </text>
+        </g>
+      ))}
+    </svg>
   );
 }
