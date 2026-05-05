@@ -491,7 +491,7 @@ async function fetchCalendarEvents(calId: string, closer: string): Promise<ApptR
   return appts;
 }
 
-async function fetchAllAppointments2026(): Promise<ApptRecord[]> {
+export async function fetchAllAppointments2026(): Promise<ApptRecord[]> {
   const [mikeAppts, joshAppts] = await Promise.all([
     fetchCalendarEvents(MIKE_CALENDAR, "Mike"),
     fetchCalendarEvents(JOSH_CALENDAR, "Josh"),

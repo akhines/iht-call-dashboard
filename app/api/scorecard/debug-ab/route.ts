@@ -1,12 +1,15 @@
 import { NextResponse } from "next/server";
-import { fetchAllOpportunities2026 } from "../builder";
+import { fetchAllOpportunities2026, fetchAllAppointments2026 } from "../builder";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
 // Debug: return per-deal ab_signed/bc_signed attribution. Used to validate
-// closer attribution against Ashley's manual count.
+// closer attribution against Ashley's manual count. MUST resolve calendars
+// first — the resolveCloser logic uses the per-contact latest-appointment
+// maps populated by fetchAllAppointments2026.
 export async function GET() {
+  await fetchAllAppointments2026();
   const opps = await fetchAllOpportunities2026();
   const ab = opps.filter((o) => o.category === "ab_signed");
   const bc = opps.filter((o) => o.category === "bc_signed");
