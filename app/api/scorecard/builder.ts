@@ -50,6 +50,7 @@ const STAGES = {
 // (id g4hucgb9oTwMYC9AZmF4, DATE). Set by Ashley when the A-B contract is signed.
 // Read from /opportunities/search response as customFields[id=...].fieldValueDate (ms epoch).
 const AB_DATE_SIGNED_FIELD = "g4hucgb9oTwMYC9AZmF4";
+const BC_DATE_SIGNED_FIELD = "Lbe97UOqLlo25vZMSt6X";
 
 const CONTACT_TYPE_FIELD = "IfkLFRqVzW9XrCkXvPUQ";
 const MARKETING_CAMPAIGN_FIELD = "4fOhwf1m5nhK1c9vI6SJ";
@@ -589,10 +590,10 @@ async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
   // Discover closer user IDs + log any closing-like stages we don't already track.
   await Promise.all([discoverCloserUserIds(), logClosingLikeStages()]);
 
+  // bcAssigned removed — B-C signed now sourced from "B-C Date Signed" custom field
   const [
     mikeOffers,
     joshOffers,
-    bcAssigned,
     closedDealsA,
     closedDealsB,
     mikePipelineAll,
@@ -600,7 +601,6 @@ async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
   ] = await Promise.all([
     fetchOppsByStage(MIKE_PIPELINE, STAGES.mikeOfferMade),
     fetchOppsByStage(JOSH_PIPELINE, STAGES.joshOffered),
-    fetchOppsByStage(TC_PIPELINE, STAGES.tcBcAssigned),
     fetchOppsByStage(DEALS_PIPELINE, STAGES.dealsClosedDeal),
     fetchOppsByStage(TC_PIPELINE, STAGES.tcClosedDispo),
     fetchAllOppsInPipeline(MIKE_PIPELINE),
@@ -754,20 +754,59 @@ async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
     }
   }
 
-  // B-C signed
-  for (const o of bcAssigned) {
-    const d = new Date(o.lastStageChangeAt).getTime();
-    const src = o.contactId ? await getContactSource(o.contactId) : o.source;
-    const closer = resolveCloser(o);
-    if (d >= JAN1_2026)
-      opps.push({
-        date: d,
-        category: "bc_signed",
-        closer,
-        name: o.name,
-        source: src,
-        monetaryValue: 0,
+  // B-C signed = opportunity custom field "B-C Date Signed" (Lbe97UOqLlo25vZMSt6X)
+  // ≥ JAN1_2026. Same authoritative custom-field pattern as A-B above. Scans
+  // every pipeline a B-C signed opp could live in. Deduped by opp id.
+  function bcSignedDateMs(o: OppLite): number | null {
+    const cfs = o?.customFields || [];
+    const entry = cfs.find((c) => c?.id === BC_DATE_SIGNED_FIELD);
+    if (!entry) return null;
+    if (typeof entry.fieldValueDate === "number") return entry.fieldValueDate;
+    if (entry.fieldValue) {
+      const t = new Date(entry.fieldValue).getTime();
+      return isNaN(t) ? null : t;
+    }
+    return null;
+  }
+
+  const bcSignedSeenOppId = new Set<string>();
+  const tagBcSigned = async (
+    o: OppLite,
+    closerHint?: "Mike" | "Josh",
+  ) => {
+    if (!o?.id || bcSignedSeenOppId.has(o.id)) return;
+    const signedMs = bcSignedDateMs(o);
+    if (signedMs === null || signedMs < JAN1_2026) return;
+    bcSignedSeenOppId.add(o.id);
+    const src = o.contactId ? await getContactSource(o.contactId) : o.source || "";
+    const closer =
+      closerHint ||
+      resolveCloser({
+        contactId: o.contactId,
+        assignedTo: o.assignedTo || "",
       });
+    opps.push({
+      date: signedMs,
+      category: "bc_signed",
+      closer,
+      name: o.name || "",
+      source: src,
+      monetaryValue: o.monetaryValue || 0,
+    });
+  };
+
+  for (const o of mikePipelineAll) await tagBcSigned(o, "Mike");
+  for (const o of joshPipelineAll) await tagBcSigned(o, "Josh");
+
+  for (const pipelineId of [TC_PIPELINE, DEALS_PIPELINE]) {
+    let nextUrl: string | null = `${BASE}/opportunities/search?location_id=${LOCATION_ID()}&pipeline_id=${pipelineId}&limit=100`;
+    for (let page = 0; page < 25 && nextUrl; page++) {
+      const r: Response = await fetch(nextUrl, { headers: getHeaders() });
+      if (!r.ok) break;
+      const data = await r.json();
+      for (const o of data.opportunities || []) await tagBcSigned(o);
+      nextUrl = data?.meta?.nextPageUrl || null;
+    }
   }
 
   // Settled (merge of dealsClosedDeal + tcClosedDispo, deduped above)
