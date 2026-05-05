@@ -3,6 +3,7 @@ import { fetchAllOpportunities2026, fetchAllAppointments2026 } from "../builder"
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
+export const dynamic = "force-dynamic"; // never SSG-prerender
 
 // Debug: return per-deal ab_signed/bc_signed attribution. Used to validate
 // closer attribution against Ashley's manual count. MUST resolve calendars
