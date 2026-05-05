@@ -46,9 +46,14 @@ const STAGES = {
   dealsClosedDeal: "245bc5b3-e2ac-4886-8928-907560ec3f15",
 };
 
-// Stages that count as a SELLER-side A-B contract being signed in each closer's own pipeline.
-// EMPTY for now — pending Ashley's confirmation of which stages map to "signed".
-// Adding the wrong ones overcounts (LTFU = bench, 1 YD LINE = near-close, not signed).
+// Authoritative A-B signed signal: the opportunity custom field "A-B Date Signed"
+// (id g4hucgb9oTwMYC9AZmF4, DATE). Set by Ashley when the A-B contract is signed.
+// Read from /opportunities/search response as customFields[id=...].fieldValueDate (ms epoch).
+const AB_DATE_SIGNED_FIELD = "g4hucgb9oTwMYC9AZmF4";
+
+// Legacy stage-based A-B detection — kept for backwards compat but no longer the
+// primary signal. The custom-field timestamp above is authoritative; these only
+// catch deals where the field wasn't filled in. EMPTY = disabled.
 const MIKE_AB_SIGNED_STAGES = new Set<string>([]);
 const JOSH_AB_SIGNED_STAGES = new Set<string>([]);
 
@@ -685,79 +690,63 @@ async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
       });
   }
 
-  // A-B signed (seller agreement signed). Three sources, deduped by contactId
-  // so a deal that lives in both a closer's pipeline AND TC pipeline counts once.
-  // Source 1: Mike pipeline opps at MIKE_AB_SIGNED_STAGES → closer Mike
-  // Source 2: Josh pipeline opps at JOSH_AB_SIGNED_STAGES → closer Josh
-  // Source 3: TC pipeline opps (catch-all — TC = post-A-B-signed by definition) → closer via resolveCloser
-  const abSignedSeen = new Set<string>();
-
-  for (const o of mikePipelineAll) {
-    if (!MIKE_AB_SIGNED_STAGES.has(o.pipelineStageId || "")) continue;
-    const cid = o.contactId || o.id || "";
-    if (cid && abSignedSeen.has(cid)) continue;
-    if (cid) abSignedSeen.add(cid);
-    const d = new Date(o.lastStageChangeAt).getTime();
-    if (d < JAN1_2026) continue;
-    const src = o.contactId ? await getContactSource(o.contactId) : o.source;
-    opps.push({
-      date: d,
-      category: "ab_signed",
-      closer: "Mike",
-      name: o.name,
-      source: src,
-      monetaryValue: o.monetaryValue || 0,
-    });
-  }
-
-  for (const o of joshPipelineAll) {
-    if (!JOSH_AB_SIGNED_STAGES.has(o.pipelineStageId || "")) continue;
-    const cid = o.contactId || o.id || "";
-    if (cid && abSignedSeen.has(cid)) continue;
-    if (cid) abSignedSeen.add(cid);
-    const d = new Date(o.lastStageChangeAt).getTime();
-    if (d < JAN1_2026) continue;
-    const src = o.contactId ? await getContactSource(o.contactId) : o.source;
-    opps.push({
-      date: d,
-      category: "ab_signed",
-      closer: "Josh",
-      name: o.name,
-      source: src,
-      monetaryValue: o.monetaryValue || 0,
-    });
-  }
-
-  // TC pipeline ab_signed (paginated) — skips deals already counted via closer pipeline
-  let tcNextUrl: string | null = `${BASE}/opportunities/search?location_id=${LOCATION_ID()}&pipeline_id=${TC_PIPELINE}&limit=100`;
-  for (let page = 0; page < 25 && tcNextUrl; page++) {
-    const tcRes: Response = await fetch(tcNextUrl, { headers: getHeaders() });
-    if (!tcRes.ok) break;
-    const tcData = await tcRes.json();
-    for (const o of tcData.opportunities || []) {
-      const cid = o.contactId || o.id || "";
-      if (cid && abSignedSeen.has(cid)) continue;
-      if (cid) abSignedSeen.add(cid);
-      const d = new Date(o.createdAt).getTime();
-      if (d >= JAN1_2026) {
-        const src = o.contactId
-          ? await getContactSource(o.contactId)
-          : o.source || "";
-        const closer = resolveCloser({
-          contactId: o.contactId,
-          assignedTo: o.assignedTo || "",
-        });
-        opps.push({
-          date: d,
-          category: "ab_signed",
-          closer,
-          name: o.name || "",
-          source: src,
-          monetaryValue: o.monetaryValue || 0,
-        });
-      }
+  // A-B signed = opportunity custom field "A-B Date Signed" (g4hucgb9oTwMYC9AZmF4)
+  // is set with a date >= JAN1_2026. Deduped by opp id. Spans every pipeline an
+  // A-B signed deal could live in (Mike, Josh, TC, Deals). The custom field is
+  // authoritative — pipeline state alone misses deals that already moved to
+  // Closed Deal in pipeline 7. See reference_ghl_custom_fields.md.
+  function abSignedDateMs(o: any): number | null {
+    const cfs: any[] = o?.customFields || [];
+    const entry = cfs.find((c) => c?.id === AB_DATE_SIGNED_FIELD);
+    if (!entry) return null;
+    // /opportunities/search uses fieldValueDate (ms epoch); /opportunities/{id} uses fieldValue (ISO string)
+    if (typeof entry.fieldValueDate === "number") return entry.fieldValueDate;
+    if (entry.fieldValue) {
+      const t = new Date(entry.fieldValue).getTime();
+      return isNaN(t) ? null : t;
     }
-    tcNextUrl = tcData?.meta?.nextPageUrl || null;
+    return null;
+  }
+
+  const abSignedSeenOppId = new Set<string>();
+  const tagAbSigned = async (
+    o: any,
+    closerHint?: "Mike" | "Josh",
+  ) => {
+    if (!o?.id || abSignedSeenOppId.has(o.id)) return;
+    const signedMs = abSignedDateMs(o);
+    if (signedMs === null || signedMs < JAN1_2026) return;
+    abSignedSeenOppId.add(o.id);
+    const src = o.contactId ? await getContactSource(o.contactId) : o.source || "";
+    const closer =
+      closerHint ||
+      resolveCloser({
+        contactId: o.contactId,
+        assignedTo: o.assignedTo || "",
+      });
+    opps.push({
+      date: signedMs,
+      category: "ab_signed",
+      closer,
+      name: o.name || "",
+      source: src,
+      monetaryValue: o.monetaryValue || 0,
+    });
+  };
+
+  // Sources: Mike, Josh, TC, Deals — every pipeline a signed-A-B opp may live in.
+  for (const o of mikePipelineAll) await tagAbSigned(o, "Mike");
+  for (const o of joshPipelineAll) await tagAbSigned(o, "Josh");
+
+  for (const pipelineId of [TC_PIPELINE, DEALS_PIPELINE]) {
+    let nextUrl: string | null = `${BASE}/opportunities/search?location_id=${LOCATION_ID()}&pipeline_id=${pipelineId}&limit=100`;
+    for (let page = 0; page < 25 && nextUrl; page++) {
+      const r: Response = await fetch(nextUrl, { headers: getHeaders() });
+      if (!r.ok) break;
+      const data = await r.json();
+      for (const o of data.opportunities || []) await tagAbSigned(o);
+      nextUrl = data?.meta?.nextPageUrl || null;
+    }
   }
 
   // B-C signed
