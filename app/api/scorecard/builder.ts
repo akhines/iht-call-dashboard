@@ -51,12 +51,6 @@ const STAGES = {
 // Read from /opportunities/search response as customFields[id=...].fieldValueDate (ms epoch).
 const AB_DATE_SIGNED_FIELD = "g4hucgb9oTwMYC9AZmF4";
 
-// Legacy stage-based A-B detection — kept for backwards compat but no longer the
-// primary signal. The custom-field timestamp above is authoritative; these only
-// catch deals where the field wasn't filled in. EMPTY = disabled.
-const MIKE_AB_SIGNED_STAGES = new Set<string>([]);
-const JOSH_AB_SIGNED_STAGES = new Set<string>([]);
-
 const CONTACT_TYPE_FIELD = "IfkLFRqVzW9XrCkXvPUQ";
 const MARKETING_CAMPAIGN_FIELD = "4fOhwf1m5nhK1c9vI6SJ";
 
@@ -695,8 +689,19 @@ async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
   // A-B signed deal could live in (Mike, Josh, TC, Deals). The custom field is
   // authoritative — pipeline state alone misses deals that already moved to
   // Closed Deal in pipeline 7. See reference_ghl_custom_fields.md.
-  function abSignedDateMs(o: any): number | null {
-    const cfs: any[] = o?.customFields || [];
+  type CfEntry = { id?: string; fieldValueDate?: number; fieldValue?: string };
+  type OppLite = {
+    id?: string;
+    name?: string;
+    contactId?: string;
+    assignedTo?: string;
+    source?: string;
+    monetaryValue?: number;
+    customFields?: CfEntry[];
+  };
+
+  function abSignedDateMs(o: OppLite): number | null {
+    const cfs = o?.customFields || [];
     const entry = cfs.find((c) => c?.id === AB_DATE_SIGNED_FIELD);
     if (!entry) return null;
     // /opportunities/search uses fieldValueDate (ms epoch); /opportunities/{id} uses fieldValue (ISO string)
@@ -710,7 +715,7 @@ async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
 
   const abSignedSeenOppId = new Set<string>();
   const tagAbSigned = async (
-    o: any,
+    o: OppLite,
     closerHint?: "Mike" | "Josh",
   ) => {
     if (!o?.id || abSignedSeenOppId.has(o.id)) return;
