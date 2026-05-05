@@ -584,7 +584,7 @@ async function fetchAllOppsInPipeline(
   return results;
 }
 
-async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
+export async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
   const opps: OppRecord[] = [];
 
   // Discover closer user IDs + log any closing-like stages we don't already track.
