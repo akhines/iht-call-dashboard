@@ -611,12 +611,8 @@ export async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
     `[Scorecard] Pipeline membership sets — Mike pipeline opps=${mikePipelineAll.length}, Josh pipeline opps=${joshPipelineAll.length}`
   );
 
-  const mikeContactIds = new Set(
-    mikePipelineAll.map((o) => o.contactId).filter(Boolean)
-  );
-  const joshContactIds = new Set(
-    joshPipelineAll.map((o) => o.contactId).filter(Boolean)
-  );
+  // mikeContactIds / joshContactIds removed — resolveCloser no longer uses
+  // pipeline-membership fallback; opp.assignedTo is the only signal.
 
   // Merge closings, dedupe by opp id (a deal could in theory live in both stages).
   const closedById = new Map<string, OppSearchResult>();
