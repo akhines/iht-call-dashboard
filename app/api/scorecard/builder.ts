@@ -637,24 +637,15 @@ export async function fetchAllOpportunities2026(): Promise<OppRecord[]> {
     assignedTo?: string;
   }): "Mike" | "Josh" => {
     const assignedTo = o.assignedTo || "";
-    // 1. Direct user-id assignment is authoritative
-    if (mikeUserId && assignedTo === mikeUserId) return "Mike";
+    // The ONLY reliable Josh signal: opp.assignedTo is explicitly Josh's user
+    // ID. Per Ashley 2026-05-07: calendar fallback over-attributed to Josh
+    // (e.g. Josh did a follow-up call on a Mike deal → Josh's calendar got
+    // a more-recent entry → resolveCloser flipped the deal). Calendar isn't
+    // reliable enough to attribute closer when assignedTo is Emma.
     if (joshUserId && assignedTo === joshUserId) return "Josh";
-    const cid = o.contactId || "";
-    // 2. Calendar appointment is the canonical closer signal — whichever
-    //    closer's calendar held the most-recent appt for this contact wins.
-    //    This is what GHL "Opportunity Owner" effectively encodes when
-    //    assignedTo is Emma (the TC coordinator) or empty.
-    if (cid) {
-      const mAppt = mikeCalendarLatest.get(cid) || 0;
-      const jAppt = joshCalendarLatest.get(cid) || 0;
-      if (mAppt && mAppt >= jAppt) return "Mike";
-      if (jAppt) return "Josh";
-    }
-    // 3. Fall back to source pipeline membership
-    if (cid && mikeContactIds.has(cid)) return "Mike";
-    if (cid && joshContactIds.has(cid)) return "Josh";
-    return mikeOffers.some((m) => m.contactId === cid) ? "Mike" : "Josh";
+    if (mikeUserId && assignedTo === mikeUserId) return "Mike";
+    // Default to Mike — he's the primary closer; Josh is the exception.
+    return "Mike";
   };
 
   for (const o of mikeOffers) {
