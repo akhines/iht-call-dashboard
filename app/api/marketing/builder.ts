@@ -90,17 +90,18 @@ const JOSH_CALENDAR = "19xfzyb7vedvmzqNf8FK";
 const TC_PIPELINE = "ofMQolXiKGyg6WNOJS88";
 const MIKE_PIPELINE = "nwSjS0rUTMGbgDvyrEe4";
 const JOSH_PIPELINE = "ggnBpwig6OE37fXPQv7a";
-const CONTACT_TYPE_FIELD = "IfkLFRqVzW9XrCkXvPUQ";
 const MARKETING_CAMPAIGN_FIELD = "4fOhwf1m5nhK1c9vI6SJ";
 
 const JAN1_2026 = new Date("2026-01-01T00:00:00Z").getTime();
 
 function getChannel(source: string, campaign: string): string {
-  // Use SOURCE as primary signal (set by GHL workflow at lead creation,
-  // authoritative). Fall back to campaign only when source returns no match.
-  // Order matters — check PPC BEFORE TV so that a deal with source
-  // "PPC: Google Ads" whose contact also has campaign field "TV AD"
-  // doesn't get miscategorized as TV.
+  // Per Ashley 2026-05-11: Marketing Campaign custom field
+  // (4fOhwf1m5nhK1c9vI6SJ) is the AUTHORITATIVE signal — that's what her
+  // GHL Smart List filters use. `c.source` is checked only as a fallback
+  // when Marketing Campaign is blank.
+  //
+  // Order matters — check PPC BEFORE TV so that "PPC: Google Ads" doesn't
+  // get caught by the "tv" prefix check.
   const matchOne = (raw: string): string | null => {
     const s = (raw || "").toLowerCase().trim();
     if (!s) return null;
@@ -127,7 +128,7 @@ function getChannel(source: string, campaign: string): string {
       return "Other";
     return null;
   };
-  return matchOne(source) || matchOne(campaign) || "Other";
+  return matchOne(campaign) || matchOne(source) || "Other";
 }
 
 interface Week {
@@ -275,12 +276,17 @@ async function fetchAllSellerLeads(): Promise<LeadRecord[]> {
         contactSourceCache.set(c.id, getChannel(c.source || "", campaign));
       }
 
-      if (cfs[CONTACT_TYPE_FIELD] === "Seller") {
-        const campaign = cfs[MARKETING_CAMPAIGN_FIELD] || "";
+      // Lead-count filter per Ashley 2026-05-11: matches her GHL Smart List
+      // filter exactly — Marketing Campaign field set AND Street Address
+      // non-empty. The old "Contact Type = Seller" filter was wrong and
+      // was undercounting (e.g., 4/20-4/26 PPC = 0 reported vs 1 truth).
+      const campaign = cfs[MARKETING_CAMPAIGN_FIELD] || "";
+      const hasAddress = !!(c.address1 && c.address1.trim());
+      if (campaign && hasAddress) {
         leads.push({
           date: created,
           channel: getChannel(c.source || "", campaign),
-          hasAddress: !!(c.address1 && c.address1.trim()),
+          hasAddress: true,
         });
       }
     }
