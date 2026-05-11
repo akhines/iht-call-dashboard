@@ -21,6 +21,14 @@ export function weekKey(monday: string): string {
 const BASE = "https://services.leadconnectorhq.com";
 const BCDI_BASE = "https://bcdi-api.fly.dev";
 
+// TV agency fees on top of media spend.
+// Allocated to the first builder-week of each calendar month from
+// engagement start; annual fee allocated to the first week of January.
+const TV_AGENCY_MONTHLY_FEE = 997;
+const TV_AGENCY_ANNUAL_FEE = 5000;
+const TV_AGENCY_ANNUAL_MONTH = 1; // 1 = January
+const TV_AGENCY_START = "2026-01-01"; // YYYY-MM-DD; weeks before this get $0 fees
+
 interface SheetSpendRow {
   startDate: string;
   endDate: string;
@@ -421,46 +429,27 @@ async function fetchAllDeals(): Promise<DealRecord[]> {
     `[Marketing] Settled candidates: dealsClosedDeal=${closedA.length}, tcClosedDispo=${closedB.length}, merged=${closedDeals.length}`
   );
 
-  // Batch detail fetches in parallel (10 at a time) — same shape as the
-  // scorecard builder's settled loop. Per-deal detail still needed for the
-  // closingDate custom field (id `bbDP5pNJ96IMth9bQfh8`).
-  const BATCH = 10;
-  for (let i = 0; i < closedDeals.length; i += BATCH) {
-    const slice = closedDeals.slice(i, i + BATCH);
-    const details = await Promise.all(
-      slice.map(async (o) => {
-        try {
-          const r = await fetch(`${BASE}/opportunities/${o.id}`, {
-            headers: getHeaders(),
-          });
-          if (!r.ok) return null;
-          return await r.json();
-        } catch {
-          return null;
-        }
-      })
-    );
-    for (let j = 0; j < slice.length; j++) {
-      const o = slice[j];
-      const detail = details[j];
-      if (!detail) continue;
-      const opp = detail.opportunity || detail;
-      const cfs: Record<string, string> = {};
-      for (const cf of opp.customFields || []) {
-        cfs[cf.id] = cf.fieldValue || cf.fieldValueString || "";
-      }
-      const closingDate = cfs[CLOSING_DATE_FIELD] || "";
-      const monetaryValue = opp.monetaryValue || 0;
-
-      if (!closingDate || closingDate < "2026") continue;
-      const d = new Date(closingDate).getTime();
-      if (d < JAN1_2026) continue;
-      // Async fallback for settled deals only (low-volume, high-value).
-      // See `resolveOppChannelAsync` comment — fixes pre-2026 contact + empty
-      // opp.source PPC settled cases that were undercounted (3 → 5).
-      const ch = await resolveOppChannelAsync(o);
-      deals.push({ date: d, channel: ch, category: "settled", monetaryValue });
-    }
+  // Settled date = the moment the opp was moved into the Closed Deal stage
+  // in Pipeline 7 (Deals). Per Ashley 2026-05-11: this is THE date a deal
+  // counts as settled. The custom date fields (A-B Date Signed, Closing
+  // Confirmed Date B-C, etc.) are inconsistently populated and shouldn't
+  // be used. lastStageChangeAt on a status=won opp in Closed Deal stage
+  // is reliable and present on every closed deal.
+  //
+  // No per-deal detail fetch needed — the search response already includes
+  // lastStageChangeAt, source, customFields.
+  for (const o of closedDeals) {
+    const stageChangeMs = o.lastStageChangeAt
+      ? new Date(o.lastStageChangeAt).getTime()
+      : 0;
+    if (!stageChangeMs || stageChangeMs < JAN1_2026) continue;
+    const ch = await resolveOppChannelAsync(o);
+    deals.push({
+      date: stageChangeMs,
+      channel: ch,
+      category: "settled",
+      monetaryValue: o.monetaryValue || 0,
+    });
   }
 
   return deals;
@@ -691,6 +680,56 @@ export function applyManualInputs(
  * starting 2026-01-05; the sheet starts 2026-01-05 too) we also fall
  * back to a ±3-day window to be tolerant of any drift.
  */
+/**
+ * Inject TV agency fees on top of TV media spend. Allocates $997 to the
+ * earliest builder-week of each calendar month, plus a $5,000 annual fee
+ * to the first week of January each year. Only weeks on/after
+ * TV_AGENCY_START are charged.
+ *
+ * Iterates in chronological order so the "first week of month" allocation
+ * is deterministic regardless of input order. Exported so the GET route
+ * can apply it AFTER reading from the per-week KV cache — that way
+ * historically locked weeks pick up fee changes without a full rebuild.
+ */
+export function applyTvAgencyFees(weekData: MarketingWeekData[]): MarketingWeekData[] {
+  if (weekData.length === 0) return weekData;
+  // Map weekKey → fee amount so we can apply without re-sorting the output.
+  const feeByWeek = new Map<string, number>();
+  const monthSeen = new Set<string>(); // "YYYY-MM"
+  const yearSeen = new Set<string>(); // "YYYY"
+  const sorted = [...weekData].sort((a, b) => a.weekKey.localeCompare(b.weekKey));
+  for (const w of sorted) {
+    if (w.weekKey < TV_AGENCY_START) continue;
+    const ym = w.weekKey.slice(0, 7);
+    const y = w.weekKey.slice(0, 4);
+    let fee = 0;
+    if (!monthSeen.has(ym)) {
+      monthSeen.add(ym);
+      fee += TV_AGENCY_MONTHLY_FEE;
+    }
+    const monthNum = parseInt(ym.slice(5, 7), 10);
+    if (!yearSeen.has(y) && monthNum === TV_AGENCY_ANNUAL_MONTH) {
+      yearSeen.add(y);
+      fee += TV_AGENCY_ANNUAL_FEE;
+    }
+    if (fee > 0) feeByWeek.set(w.weekKey, fee);
+  }
+  if (feeByWeek.size === 0) return weekData;
+  return weekData.map((w) => {
+    const fee = feeByWeek.get(w.weekKey);
+    if (!fee) return w;
+    const tv = w.channels.TV;
+    if (!tv) return w;
+    return {
+      ...w,
+      channels: {
+        ...w.channels,
+        TV: { ...tv, spend: (tv.spend || 0) + fee },
+      },
+    };
+  });
+}
+
 function applySheetSpend(
   weekData: MarketingWeekData[],
   sheetMap: Map<string, SheetSpendRow>
@@ -947,6 +986,9 @@ export async function buildFreshMarketing(): Promise<MarketingData> {
   );
 
   const baseWeekData = buildWeekData(weeks, allLeads, allAppts, allDeals);
+  // Note: applyTvAgencyFees is applied at READ time (route.ts GET), not
+  // build time, so fee changes apply to historically locked weeks
+  // immediately without forcing a full rebuild.
   const withSpend = applySheetSpend(baseWeekData, sheetSpend);
 
   // OVERRIDE per-channel settled / grossProfit using scorecard's

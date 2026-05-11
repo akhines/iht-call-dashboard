@@ -6,6 +6,7 @@ import {
   MarketingCachePayload,
   MarketingWeekCacheEntry,
   applyManualInputs,
+  applyTvAgencyFees,
   weekKey,
 } from "./builder";
 
@@ -71,7 +72,9 @@ export async function GET() {
     try {
       const cached = await kv.get<MarketingCachePayload>(FRESH_KEY);
       if (cached && cached.data) {
-        const overlaid = applyManualInputs(cached.data.weeks, manualInputs);
+        const overlaid = applyTvAgencyFees(
+          applyManualInputs(cached.data.weeks, manualInputs),
+        );
         return NextResponse.json({
           weeks: overlaid,
           channels: cached.data.channels,
@@ -110,7 +113,7 @@ export async function GET() {
   // Channel list: pull from any populated week (every entry has the same set).
   const channels = weeks[0] ? Object.keys(weeks[0].channels) : [];
 
-  const overlaid = applyManualInputs(weeks, manualInputs);
+  const overlaid = applyTvAgencyFees(applyManualInputs(weeks, manualInputs));
 
   return NextResponse.json({
     weeks: overlaid,
