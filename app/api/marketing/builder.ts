@@ -189,36 +189,38 @@ function getContactChannelCached(contactId: string): string | null {
 }
 
 // Resolve channel for an opportunity. Priority:
-// 1. Contact source cache (set during fetchAllSellerLeads from contact source+campaign)
-// 2. Opportunity's own `source` field (carries contact source — set by GHL workflow)
+// 1. Opportunity's own `source` field (carries contact source — set by GHL workflow)
+// 2. Contact source cache (set during fetchAllSellerLeads from contact source+campaign)
 // 3. "Other" as final fallback (logged so we can spot mis-attributions)
+//
+// Why opp.source FIRST: the contact-source cache can mis-classify older leads
+// as "Other" when fetchAllSellerLeads doesn't see `source` on a paginated
+// contacts listing. opp.source is set authoritatively at opp creation by the
+// GHL workflow (e.g., "TV AD", "PPC: Google Ads") and is the most reliable
+// signal. Cache is still consulted as a fallback when opp.source is blank.
 function resolveOppChannel(opp: { contactId?: string; source?: string }): string {
-  const cached = opp.contactId ? getContactChannelCached(opp.contactId) : null;
-  if (cached) return cached;
   if (opp.source) {
     const fromOpp = getChannel(opp.source, "");
     if (fromOpp !== "Other") return fromOpp;
   }
+  const cached = opp.contactId ? getContactChannelCached(opp.contactId) : null;
+  if (cached && cached !== "Other") return cached;
   return "Other";
 }
 
 // Async resolver — used ONLY for settled deals (high-value, low-volume).
-// Fixes the cache-miss case where a settled-deal opportunity's contact was
-// created BEFORE 2026 (skipped by the JAN1_2026 filter in fetchAllSellerLeads)
-// AND the opp's own `source` field is empty. Without this fallback those
-// PPC settled deals fell through to "Other" (3 reported vs 5 truth in YTD 2026).
-// We intentionally do NOT use this for A-B / closing loops — those are higher
-// volume and the cached + opp.source path is fast enough to keep them sync.
+// Same priority as resolveOppChannel but adds a final contact-fetch fallback
+// when both opp.source and cache miss.
 async function resolveOppChannelAsync(opp: {
   contactId?: string;
   source?: string;
 }): Promise<string> {
-  const cached = opp.contactId ? getContactChannelCached(opp.contactId) : null;
-  if (cached) return cached;
   if (opp.source) {
     const fromOpp = getChannel(opp.source, "");
     if (fromOpp !== "Other") return fromOpp;
   }
+  const cached = opp.contactId ? getContactChannelCached(opp.contactId) : null;
+  if (cached && cached !== "Other") return cached;
   // Final resort: fetch the contact directly to read source + Marketing Campaign field
   if (opp.contactId) {
     try {
@@ -436,20 +438,48 @@ async function fetchAllDeals(): Promise<DealRecord[]> {
   // be used. lastStageChangeAt on a status=won opp in Closed Deal stage
   // is reliable and present on every closed deal.
   //
-  // No per-deal detail fetch needed — the search response already includes
-  // lastStageChangeAt, source, customFields.
-  for (const o of closedDeals) {
-    const stageChangeMs = o.lastStageChangeAt
-      ? new Date(o.lastStageChangeAt).getTime()
-      : 0;
-    if (!stageChangeMs || stageChangeMs < JAN1_2026) continue;
-    const ch = await resolveOppChannelAsync(o);
-    deals.push({
-      date: stageChangeMs,
-      channel: ch,
-      category: "settled",
-      monetaryValue: o.monetaryValue || 0,
-    });
+  // Per-deal detail fetch is still required because GHL `/opportunities/search`
+  // does NOT return the `source` field — only `/opportunities/{id}` does. Without
+  // it, channel attribution falls through to "Other" for any contact whose
+  // cached channel is missing/Other (Dorothy/Jerry/George/Hifza all hit this).
+  const BATCH = 10;
+  for (let i = 0; i < closedDeals.length; i += BATCH) {
+    const slice = closedDeals.slice(i, i + BATCH);
+    const details = await Promise.all(
+      slice.map(async (o) => {
+        try {
+          const r = await fetch(`${BASE}/opportunities/${o.id}`, {
+            headers: getHeaders(),
+          });
+          if (!r.ok) return null;
+          return await r.json();
+        } catch {
+          return null;
+        }
+      })
+    );
+    for (let j = 0; j < slice.length; j++) {
+      const o = slice[j];
+      const detail = details[j];
+      const opp = detail?.opportunity || detail || o;
+      const stageChangeMs = opp.lastStageChangeAt
+        ? new Date(opp.lastStageChangeAt).getTime()
+        : 0;
+      if (!stageChangeMs || stageChangeMs < JAN1_2026) continue;
+      // Merge: prefer detail's source (always populated on the detail endpoint)
+      // over the search-row source (often empty).
+      const merged = {
+        contactId: opp.contactId || o.contactId,
+        source: opp.source || o.source,
+      };
+      const ch = await resolveOppChannelAsync(merged);
+      deals.push({
+        date: stageChangeMs,
+        channel: ch,
+        category: "settled",
+        monetaryValue: opp.monetaryValue || o.monetaryValue || 0,
+      });
+    }
   }
 
   return deals;
