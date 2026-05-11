@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 30;
+export const maxDuration = 60;
 
 const BASE = "https://services.leadconnectorhq.com";
+const MARKETING_CAMPAIGN_FIELD = "4fOhwf1m5nhK1c9vI6SJ";
 
 function getHeaders() {
   return {
@@ -25,36 +26,73 @@ function getChannel(source: string, campaign: string): string {
     if (s.includes("mail")) return "Mail";
     return null;
   };
-  return matchOne(source) || matchOne(campaign) || "Other";
+  return matchOne(campaign) || matchOne(source) || "Other";
 }
 
-const DEAL_IDS = [
-  ["Dorothy*TV", "0vFLywBqLaFb6IO7P7Bg"],
-  ["Jerry Branch*TV", "0cGydAyTkA9FapPtL4E4"],
-  ["George Jackson*TV", "0VqRZjp8sjpz7ZAJkxvJ"],
-  ["Mrs.Carter*TV", "J4A0XUxdQKR23WrvZoEt"],
-  ["Ronald Jamison*TV", "SKkTjzDkRj7ceSgrbF1G"],
-];
-
 export async function GET() {
+  const LOC = process.env.GHL_LOCATION_ID;
   const out: Array<Record<string, unknown>> = [];
-  for (const [name, id] of DEAL_IDS) {
+
+  // 1. Search closed deals
+  const url = `${BASE}/opportunities/search?location_id=${LOC}&pipeline_id=DiGXnGTlQCOMZQJmWQe9&pipeline_stage_id=245bc5b3-e2ac-4886-8928-907560ec3f15&limit=100`;
+  const r = await fetch(url, { headers: getHeaders() });
+  const search = await r.json();
+
+  for (const o of (search.opportunities || []).slice(0, 50)) {
+    const t = new Date(o.lastStageChangeAt || 0).getTime();
+    if (t < new Date("2026-04-01").getTime()) continue;
+    if (!o.monetaryValue) continue;
+
+    // Step 1: search row source
+    const searchSource = o.source || "";
+
+    // Step 2: per-deal detail fetch
+    let detailSource = "";
+    let detailContactId = "";
     try {
-      const r = await fetch(`${BASE}/opportunities/${id}`, { headers: getHeaders() });
-      const detail = r.ok ? await r.json() : null;
-      const opp = detail?.opportunity || detail || {};
-      const channelFromSource = getChannel(opp.source || "", "");
-      out.push({
-        name,
-        id,
-        source: opp.source ?? null,
-        channelFromSource,
-        contactId: opp.contactId ?? null,
-        lastStageChangeAt: opp.lastStageChangeAt ?? null,
-      });
-    } catch (e) {
-      out.push({ name, id, error: String(e) });
+      const dr = await fetch(`${BASE}/opportunities/${o.id}`, { headers: getHeaders() });
+      if (dr.ok) {
+        const detail = await dr.json();
+        const opp = detail?.opportunity || detail;
+        detailSource = opp?.source || "";
+        detailContactId = opp?.contactId || "";
+      }
+    } catch {}
+
+    // Step 3: merged source (what the builder uses)
+    const mergedSource = detailSource || searchSource;
+
+    // Step 4: contact MC (via direct fetch)
+    let contactMC = "";
+    let contactSrc = "";
+    if (detailContactId || o.contactId) {
+      try {
+        const cr = await fetch(`${BASE}/contacts/${detailContactId || o.contactId}`, { headers: getHeaders() });
+        if (cr.ok) {
+          const cd = await cr.json();
+          const c = cd.contact || {};
+          contactSrc = c.source || "";
+          const cfs: Record<string, string> = {};
+          for (const cf of c.customFields || []) cfs[cf.id] = cf.value;
+          contactMC = cfs[MARKETING_CAMPAIGN_FIELD] || "";
+        }
+      } catch {}
     }
+
+    out.push({
+      name: o.name,
+      monetaryValue: o.monetaryValue,
+      lastStageChangeAt: (o.lastStageChangeAt || "").slice(0, 10),
+      searchSource,
+      detailSource,
+      mergedSource,
+      contactSrc,
+      contactMC,
+      channel_from_mergedSource: getChannel(mergedSource, ""),
+      channel_from_contactMC: getChannel("", contactMC),
+      channel_from_both: getChannel(contactSrc || mergedSource, contactMC),
+    });
   }
+
   return NextResponse.json(out);
 }
