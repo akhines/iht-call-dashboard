@@ -109,8 +109,8 @@ export default function SeoPage() {
         </header>
         <div className="flex-1 bg-gray-50 p-4 sm:p-6 space-y-6 overflow-auto">
           {[
-            { id: "kIV1C", label: "Overview" },
-            { id: "p_m63q9t54bd", label: "Detail" },
+            { id: "kIV1C", label: "Summary" },
+            { id: "p_m63q9t54bd", label: "Device & Location" },
           ].map((p) => (
             <section
               key={p.id}

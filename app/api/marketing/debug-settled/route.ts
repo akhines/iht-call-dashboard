@@ -12,6 +12,22 @@ function getHeaders() {
   };
 }
 
+function getChannel(source: string, campaign: string): string {
+  const matchOne = (raw: string): string | null => {
+    const s = (raw || "").toLowerCase().trim();
+    if (!s) return null;
+    if (s.includes("ppc") || s.includes("google ads")) return "PPC";
+    if (s.includes("seo") || s.includes("google search") || s.includes("organic") || s.includes("gmb")) return "SEO";
+    if (s.includes("direct mail") || s.includes("probate")) return "Mail";
+    if (s.startsWith("tv") || /\btv\b/.test(s)) return "TV";
+    if (s.includes("ppl") || s.includes("pay per lead")) return "PPL";
+    if (s.includes("referral")) return "Other";
+    if (s.includes("mail")) return "Mail";
+    return null;
+  };
+  return matchOne(source) || matchOne(campaign) || "Other";
+}
+
 const DEAL_IDS = [
   ["Dorothy*TV", "0vFLywBqLaFb6IO7P7Bg"],
   ["Jerry Branch*TV", "0cGydAyTkA9FapPtL4E4"],
@@ -27,16 +43,14 @@ export async function GET() {
       const r = await fetch(`${BASE}/opportunities/${id}`, { headers: getHeaders() });
       const detail = r.ok ? await r.json() : null;
       const opp = detail?.opportunity || detail || {};
+      const channelFromSource = getChannel(opp.source || "", "");
       out.push({
         name,
         id,
-        httpStatus: r.status,
-        topLevelKeys: detail ? Object.keys(detail).slice(0, 30) : null,
-        oppKeys: opp ? Object.keys(opp).slice(0, 30) : null,
         source: opp.source ?? null,
+        channelFromSource,
         contactId: opp.contactId ?? null,
         lastStageChangeAt: opp.lastStageChangeAt ?? null,
-        status: opp.status ?? null,
       });
     } catch (e) {
       out.push({ name, id, error: String(e) });
