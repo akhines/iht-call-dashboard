@@ -416,7 +416,6 @@ async function fetchAllDeals(): Promise<DealRecord[]> {
   const DEALS_PIPELINE = "DiGXnGTlQCOMZQJmWQe9";
   const STAGE_DEALS_CLOSED = "245bc5b3-e2ac-4886-8928-907560ec3f15";
   const STAGE_TC_CLOSED_DISPO = "8464b838-cb2d-497a-89f6-07c4025ae17f";
-  const CLOSING_DATE_FIELD = "bbDP5pNJ96IMth9bQfh8";
 
   const [closedA, closedB] = await Promise.all([
     fetchAllOppsPaginated(DEALS_PIPELINE, STAGE_DEALS_CLOSED),
