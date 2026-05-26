@@ -368,7 +368,7 @@ async function fetchAllSellerContacts2026(): Promise<SellerContact[]> {
         sellers.push({
           dateAdded: created,
           hasAddress: !!(c.address1 && c.address1.trim()),
-          source: c.source || "",
+          source: cfs[MARKETING_CAMPAIGN_FIELD] || c.source || "",
         });
       }
     }
@@ -418,7 +418,7 @@ async function getContactSource(contactId: string): Promise<string> {
   const cfs: Record<string, string> = {};
   for (const cf of c.customFields || []) cfs[cf.id] = cf.value;
   const campaign = cfs[MARKETING_CAMPAIGN_FIELD] || "";
-  const src = c.source || campaign || "Other";
+  const src = campaign || c.source || "Other";
   contactSourceCache.set(contactId, src);
   return src;
 }
