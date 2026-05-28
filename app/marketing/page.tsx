@@ -45,16 +45,17 @@ const CHANNEL_COLORS: Record<string, string> = {
 // hidden everywhere except in the YTD top-line totals (which keep summing
 // across all channels for accuracy). Use this everywhere a channel list is
 // rendered: cost cards, comparison table, weekly grid columns.
-const VISIBLE_CHANNELS = ["TV", "PPC", "Mail", "SEO"] as const;
+const VISIBLE_CHANNELS = ["TV", "PPC", "Mail", "SEO", "Referral"] as const;
 type VisibleChannel = typeof VISIBLE_CHANNELS[number];
 
 // Solid hex colors mirroring CHANNEL_COLORS — used for the inline horizontal
 // bar fills in the Channel Comparison table.
 const CHANNEL_BAR_FILL: Record<VisibleChannel, string> = {
-  TV: "#eab308",     // yellow-500
-  PPC: "#3b82f6",    // blue-500
-  Mail: "#16a34a",   // green-600
-  SEO: "#a855f7",    // purple-500
+  TV: "#eab308",        // yellow-500
+  PPC: "#3b82f6",       // blue-500
+  Mail: "#16a34a",      // green-600
+  SEO: "#a855f7",       // purple-500
+  Referral: "#14b8a6",  // teal-500
 };
 
 // Pill / badge color tokens for the YTD cost-per tiles. Match the
@@ -66,6 +67,7 @@ const CHANNEL_BADGE: Record<string, string> = {
   Mail: "bg-rose-100 text-rose-700 border-rose-200",
   SEO: "bg-amber-100 text-amber-700 border-amber-200",
   PPL: "bg-purple-100 text-purple-700 border-purple-200",
+  Referral: "bg-teal-100 text-teal-700 border-teal-200",
   Other: "bg-gray-100 text-gray-700 border-gray-200",
 };
 
@@ -74,6 +76,7 @@ const CHANNEL_LABELS: Record<string, string> = {
   PPC: "PPC (Google Ads)",
   Mail: "Direct Mail",
   PPL: "PPL",
+  Referral: "Referral",
   Other: "Unknown/Other",
   SEO: "SEO/Webleads",
 };
