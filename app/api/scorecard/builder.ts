@@ -364,6 +364,14 @@ async function fetchAllSellerContacts2026(): Promise<SellerContact[]> {
       const cfs: Record<string, string> = {};
       for (const cf of c.customFields || []) cfs[cf.id] = cf.value;
 
+      // Pre-populate the source cache from the listing's customFields so
+      // downstream settled detection doesn't have to re-fetch each contact
+      // individually (which rate-limits and silently caches "Other").
+      if (c.id) {
+        const campaign = cfs[MARKETING_CAMPAIGN_FIELD] || "";
+        contactSourceCache.set(c.id, campaign || c.source || "Other");
+      }
+
       if (cfs[CONTACT_TYPE_FIELD] === "Seller") {
         sellers.push({
           dateAdded: created,
@@ -410,7 +418,9 @@ async function getContactSource(contactId: string): Promise<string> {
   if (contactSourceCache.has(contactId)) return contactSourceCache.get(contactId)!;
   const res = await fetch(`${BASE}/contacts/${contactId}`, { headers: getHeaders() });
   if (!res.ok) {
-    contactSourceCache.set(contactId, "Other");
+    // Don't cache the failure — let the next call retry. Caching "Other" on
+    // a rate-limit/timeout silently buries the real source for the rest of
+    // the run.
     return "Other";
   }
   const data = await res.json();
