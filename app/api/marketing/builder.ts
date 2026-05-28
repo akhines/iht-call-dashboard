@@ -271,9 +271,16 @@ async function fetchAllSellerLeads(): Promise<LeadRecord[]> {
       for (const cf of c.customFields || []) cfs[cf.id] = cf.value;
 
       // Pre-populate channel cache for ALL contacts we see
+      //
+      // GUARDRAIL 3: Only cache when getChannel returns something real.
+      // Caching "Other" here on a listing row with empty source+campaign
+      // permanently buries the channel — the dedicated contact fetch in
+      // resolveOppChannelAsync would have read customFields fully. Leave
+      // the slot unset → async resolver does the targeted lookup later.
       if (c.id) {
         const campaign = cfs[MARKETING_CAMPAIGN_FIELD] || "";
-        contactSourceCache.set(c.id, getChannel(c.source || "", campaign));
+        const ch = getChannel(c.source || "", campaign);
+        if (ch && ch !== "Other") contactSourceCache.set(c.id, ch);
       }
 
       // Lead-count filter per Ashley 2026-05-11: matches her GHL Smart List

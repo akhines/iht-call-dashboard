@@ -367,9 +367,16 @@ async function fetchAllSellerContacts2026(): Promise<SellerContact[]> {
       // Pre-populate the source cache from the listing's customFields so
       // downstream settled detection doesn't have to re-fetch each contact
       // individually (which rate-limits and silently caches "Other").
+      //
+      // GUARDRAIL 3: Only cache when we actually resolved a source. Caching
+      // "Other" on a listing row that happened to have empty source+campaign
+      // permanently buries the real value (the dedicated contact fetch
+      // would have populated customFields more fully). Leave the slot
+      // unset → getContactSource will run a targeted fetch next time.
       if (c.id) {
         const campaign = cfs[MARKETING_CAMPAIGN_FIELD] || "";
-        contactSourceCache.set(c.id, campaign || c.source || "Other");
+        const resolved = campaign || c.source || "";
+        if (resolved) contactSourceCache.set(c.id, resolved);
       }
 
       if (cfs[CONTACT_TYPE_FIELD] === "Seller") {
@@ -428,9 +435,14 @@ async function getContactSource(contactId: string): Promise<string> {
   const cfs: Record<string, string> = {};
   for (const cf of c.customFields || []) cfs[cf.id] = cf.value;
   const campaign = cfs[MARKETING_CAMPAIGN_FIELD] || "";
-  const src = campaign || c.source || "Other";
-  contactSourceCache.set(contactId, src);
-  return src;
+  const resolved = campaign || c.source || "";
+  // GUARDRAIL 3: Only cache when we actually resolved a source. A
+  // successful 200 with empty source+campaign is still "no signal";
+  // caching "Other" buries the real value if it lands in customFields
+  // on a later request. Return the fallback without persisting it.
+  if (!resolved) return "Other";
+  contactSourceCache.set(contactId, resolved);
+  return resolved;
 }
 
 async function fetchCalendarEvents(calId: string, closer: string): Promise<ApptRecord[]> {
