@@ -43,10 +43,24 @@ const CHANNEL_COLORS: Record<string, string> = {
 
 // Channels surfaced on the dashboard. Unknown / Other / PPL are noise and
 // hidden everywhere except in the YTD top-line totals (which keep summing
-// across all channels for accuracy). Use this everywhere a channel list is
-// rendered: cost cards, comparison table, weekly grid columns.
-const VISIBLE_CHANNELS = ["TV", "PPC", "Mail", "SEO", "Referral"] as const;
-type VisibleChannel = typeof VISIBLE_CHANNELS[number];
+// across all channels for accuracy).
+//
+// GUARDRAIL 4: The actual visible list is DERIVED FROM THE API
+// (data.channels with "Other" + "PPL" filtered out) so that a new channel
+// can be added in the marketing builder without a page edit. The constant
+// below is only the fallback for first paint before /api/marketing
+// responds, and the source of truth for the typed CHANNEL_BAR_FILL map.
+const FALLBACK_VISIBLE_CHANNELS = ["TV", "PPC", "Mail", "SEO", "Referral"] as const;
+type VisibleChannel = typeof FALLBACK_VISIBLE_CHANNELS[number];
+
+// Channels we hide from per-channel views regardless of what the API
+// returns. Total YTD numbers still sum across them.
+const HIDDEN_CHANNELS = new Set(["Other", "PPL", "Unknown"]);
+
+function deriveVisibleChannels(apiChannels: string[]): string[] {
+  const filtered = (apiChannels || []).filter((c) => !HIDDEN_CHANNELS.has(c));
+  return filtered.length > 0 ? filtered : [...FALLBACK_VISIBLE_CHANNELS];
+}
 
 // Solid hex colors mirroring CHANNEL_COLORS — used for the inline horizontal
 // bar fills in the Channel Comparison table.
@@ -275,6 +289,15 @@ export default function MarketingPage() {
     }
     return totals;
   }, [weeks, channels]);
+
+  // GUARDRAIL 4: derive the visible-channel list from the API response so
+  // a new marketing channel (e.g. Referral, future "Door Knockers") shows
+  // up on the dashboard without a code edit. Falls back to the constant
+  // list on first paint before `channels` populates.
+  const visibleChannels = useMemo(
+    () => deriveVisibleChannels(channels),
+    [channels]
+  );
 
   // YTD totals across ALL channels — drives the wide snapshot card that
   // mirrors /direct-mail's "YTD 2026 Totals" tile band.
@@ -686,17 +709,15 @@ export default function MarketingPage() {
           {/* ── YTD Channel Cost Cards ──────────────────────────
               Source: spend pulled from '2026 Marketing Scorecard'
               cols I/O/U via bcdi-api → Vercel KV → /api/marketing.
-              Filtered to VISIBLE_CHANNELS only (TV/PPC/Mail/SEO) — the
-              Unknown/Other/PPL noise channels are hidden from per-channel
-              displays. ROI is the headline metric (big colored number). */}
+              Filtered to visibleChannels only (derived from API minus
+              Other/PPL) — the Unknown/Other/PPL noise channels are hidden
+              from per-channel displays. ROI is the headline metric. */}
           {(() => {
-            const visible = (VISIBLE_CHANNELS as readonly string[]).filter(
-              (ch) => {
-                const t = channelTotals[ch];
-                if (!t) return false;
-                return (t.spend || 0) > 0 || (t.leads || 0) > 0;
-              },
-            );
+            const visible = visibleChannels.filter((ch) => {
+              const t = channelTotals[ch];
+              if (!t) return false;
+              return (t.spend || 0) > 0 || (t.leads || 0) > 0;
+            });
             if (visible.length === 0) return null;
             return (
               <section>
@@ -826,9 +847,7 @@ export default function MarketingPage() {
               are scaled to the column max so the eye reads relative
               performance immediately. */}
           {(() => {
-            const visible = (VISIBLE_CHANNELS as readonly string[]).filter(
-              (ch) => channelTotals[ch],
-            );
+            const visible = visibleChannels.filter((ch) => channelTotals[ch]);
             if (visible.length === 0) return null;
 
             const maxOf = (key: "leads" | "appts" | "ab" | "settled") =>
@@ -1011,14 +1030,15 @@ export default function MarketingPage() {
             </div>
           </section>
 
-          {/* Weekly grid — restricted to VISIBLE_CHANNELS so the noisy
-              Unknown / Other / PPL columns no longer crowd the table. The
-              full set still drives top-line totals (ytdAllTotals) for
-              accuracy. */}
+          {/* Weekly grid — restricted to visibleChannels (API-derived, minus
+              Other/PPL) so the noisy Unknown / Other / PPL columns no
+              longer crowd the table. The full set still drives top-line
+              totals (ytdAllTotals) for accuracy. */}
           {(() => {
-            const visibleChannels = (VISIBLE_CHANNELS as readonly string[]).filter(
-              (ch) => channels.includes(ch),
-            );
+            // GUARDRAIL 4: visibleChannels is derived from the API at the
+            // component level via deriveVisibleChannels(). No local
+            // re-filtering needed here — the outer memoized list IS the
+            // grid's column list.
             return (
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
             <div className="overflow-x-auto">
