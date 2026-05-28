@@ -7,6 +7,24 @@ import {
   getCronTargetWeekKeys,
   weekKey,
 } from "../builder";
+import { BACKUP_KEY_PREFIX, BACKUP_TTL_SECONDS } from "./backup";
+
+// Mirror of the GET route's getAllWeekStartKeys — every Monday from
+// 2026-01-05 to today. Used for the snapshot read.
+function getAllWeekStartKeys(): string[] {
+  const keys: string[] = [];
+  const current = new Date("2026-01-05T00:00:00Z");
+  const now = new Date();
+  while (current < now) {
+    const end = new Date(current);
+    end.setDate(end.getDate() + 6);
+    if (end.getTime() < now.getTime()) {
+      keys.push(current.toISOString().slice(0, 10));
+    }
+    current.setDate(current.getDate() + 7);
+  }
+  return keys;
+}
 
 export const dynamic = "force-dynamic";
 // Bumped from 60 → 300 to match marketing/refresh — full YTD GHL fetch
@@ -62,6 +80,42 @@ export async function GET(request: Request) {
         allFlag ? "all" : oneWeek ? `week=${oneWeek}` : "cron(current+last)"
       }`
     );
+
+    // GUARDRAIL 1 — Snapshot before any ?all=true rebuild.
+    // Reads every existing per-week key and writes them as a single backup
+    // blob (7d TTL) BEFORE the new build starts. Restore via
+    // /api/scorecard/refresh/restore?backup=<timestamp>&secret=...
+    let backupKey: string | null = null;
+    if (allFlag) {
+      try {
+        const allWeekKeys = getAllWeekStartKeys();
+        const kvKeys = allWeekKeys.map((k) => weekKey(k));
+        const existingEntries = (await kv.mget<WeekCacheEntry[]>(...kvKeys)) || [];
+        const snapshot: Record<string, WeekCacheEntry> = {};
+        for (let i = 0; i < allWeekKeys.length; i++) {
+          const e = existingEntries[i];
+          if (e && e.data) snapshot[allWeekKeys[i]] = e;
+        }
+        backupKey = `${BACKUP_KEY_PREFIX}${new Date().toISOString()}`;
+        await kv.set(
+          backupKey,
+          { snapshot, capturedAt: new Date().toISOString(), weekCount: Object.keys(snapshot).length },
+          { ex: BACKUP_TTL_SECONDS }
+        );
+        console.log(
+          `Scorecard refresh: snapshot written to ${backupKey} (${Object.keys(snapshot).length} weeks, 7d TTL)`
+        );
+      } catch (e) {
+        console.error("Scorecard refresh: snapshot threw:", e);
+        return NextResponse.json(
+          {
+            error: "Failed to snapshot per-week keys before ?all=true rebuild — aborting to avoid data loss",
+            detail: String(e),
+          },
+          { status: 500 }
+        );
+      }
+    }
 
     // The builder always does a full YTD fetch (GHL pagination is the bottleneck
     // — there's no cheaper way to incrementally rebuild). We then SLICE the
@@ -138,6 +192,7 @@ export async function GET(request: Request) {
       refreshedAt,
       mode: allFlag ? "all" : oneWeek ? "week" : "cron",
       writes,
+      backupKey,
     });
   } catch (error) {
     console.error("Scorecard refresh error:", error);

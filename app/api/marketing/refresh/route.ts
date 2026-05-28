@@ -7,6 +7,22 @@ import {
   getCronTargetWeekKeys,
   weekKey,
 } from "../builder";
+import { BACKUP_KEY_PREFIX, BACKUP_TTL_SECONDS } from "./backup";
+
+function getAllWeekStartKeys(): string[] {
+  const keys: string[] = [];
+  const current = new Date("2026-01-05T00:00:00Z");
+  const now = new Date();
+  while (current < now) {
+    const end = new Date(current);
+    end.setDate(end.getDate() + 6);
+    if (end.getTime() < now.getTime()) {
+      keys.push(current.toISOString().slice(0, 10));
+    }
+    current.setDate(current.getDate() + 7);
+  }
+  return keys;
+}
 
 export const dynamic = "force-dynamic";
 // Bumped from 60 → 300 because the rebuilt fetchAllDeals now paginates the
@@ -55,6 +71,47 @@ export async function GET(request: Request) {
         allFlag ? "all" : oneWeek ? `week=${oneWeek}` : "cron(current+last)"
       }`
     );
+
+    // GUARDRAIL 1 — Snapshot before any ?all=true rebuild.
+    // Restore via /api/marketing/refresh/restore?backup=<timestamp>&secret=...
+    let backupKey: string | null = null;
+    if (allFlag) {
+      try {
+        const allWeekKeys = getAllWeekStartKeys();
+        const kvKeys = allWeekKeys.map((k) => weekKey(k));
+        const existingEntries =
+          (await kv.mget<MarketingWeekCacheEntry[]>(...kvKeys)) || [];
+        const snapshot: Record<string, MarketingWeekCacheEntry> = {};
+        for (let i = 0; i < allWeekKeys.length; i++) {
+          const e = existingEntries[i];
+          if (e && e.data) snapshot[allWeekKeys[i]] = e;
+        }
+        backupKey = `${BACKUP_KEY_PREFIX}${new Date().toISOString()}`;
+        await kv.set(
+          backupKey,
+          {
+            snapshot,
+            capturedAt: new Date().toISOString(),
+            weekCount: Object.keys(snapshot).length,
+          },
+          { ex: BACKUP_TTL_SECONDS }
+        );
+        console.log(
+          `Marketing refresh: snapshot written to ${backupKey} (${Object.keys(snapshot).length} weeks, 7d TTL)`
+        );
+      } catch (e) {
+        console.error("Marketing refresh: snapshot threw:", e);
+        return NextResponse.json(
+          {
+            error:
+              "Failed to snapshot per-week keys before ?all=true rebuild — aborting to avoid data loss",
+            detail: String(e),
+          },
+          { status: 500 }
+        );
+      }
+    }
+
     const data = await buildFreshMarketing();
     const refreshedAt = new Date().toISOString();
 
@@ -122,6 +179,7 @@ export async function GET(request: Request) {
       refreshedAt,
       mode: allFlag ? "all" : oneWeek ? "week" : "cron",
       writes,
+      backupKey,
     });
   } catch (error) {
     console.error("Marketing refresh error:", error);
