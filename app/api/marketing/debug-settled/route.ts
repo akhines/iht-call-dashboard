@@ -22,7 +22,7 @@ function getChannel(source: string, campaign: string): string {
     if (s.includes("direct mail") || s.includes("probate")) return "Mail";
     if (s.startsWith("tv") || /\btv\b/.test(s)) return "TV";
     if (s.includes("ppl") || s.includes("pay per lead")) return "PPL";
-    if (s.includes("referral")) return "Other";
+    if (s.includes("referral")) return "Referral";
     if (s.includes("mail")) return "Mail";
     return null;
   };

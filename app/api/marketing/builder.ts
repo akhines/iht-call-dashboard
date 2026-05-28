@@ -117,7 +117,7 @@ function getChannel(source: string, campaign: string): string {
     if (s.includes("direct mail") || s.includes("probate")) return "Mail";
     if (s.startsWith("tv") || /\btv\b/.test(s)) return "TV";
     if (s.includes("ppl") || s.includes("pay per lead")) return "PPL";
-    if (s.includes("referral")) return "Other";
+    if (s.includes("referral")) return "Referral";
     if (s.includes("mail")) return "Mail";
     if (
       s.includes("emma") ||
@@ -490,7 +490,7 @@ async function fetchAllDeals(): Promise<DealRecord[]> {
   return deals;
 }
 
-const CHANNELS = ["TV", "PPC", "Mail", "PPL", "Other", "SEO"] as const;
+const CHANNELS = ["TV", "PPC", "Mail", "PPL", "Referral", "Other", "SEO"] as const;
 
 interface ChannelWeekData {
   leads: number;
