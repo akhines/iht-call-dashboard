@@ -8,6 +8,7 @@ import {
   weekKey,
 } from "../builder";
 import { BACKUP_KEY_PREFIX, BACKUP_TTL_SECONDS } from "./backup";
+import { dmAshley } from "@/app/lib/slack-dm";
 
 // Mirror of the GET route's getAllWeekStartKeys — every Monday from
 // 2026-01-05 to today. Used for the snapshot read.
@@ -122,6 +123,100 @@ export async function GET(request: Request) {
     // resulting weeks down to the targets and write only those per-week keys.
     const data = await buildFreshScorecard();
     const refreshedAt = new Date().toISOString();
+
+    // GUARDRAIL 2 — Post-rebuild validation gate (?all=true only).
+    // Sum new YTD settled + grossProfit, compare to the snapshot we just
+    // took. If either drops >20% AND the previous value was non-trivial
+    // (settled >= 5, grossProfit >= $50k), abort the write and DM Ashley.
+    // Default + ?week= modes skip this check — they're scoped too narrow
+    // for a YTD diff to be meaningful.
+    if (allFlag) {
+      const newSettled = data.weeks.reduce((s, w) => s + (w.settled || 0), 0);
+      const newGrossProfit = data.weeks.reduce(
+        (s, w) => s + (w.grossProfit || 0),
+        0
+      );
+
+      // Read the snapshot we just wrote to compute the previous totals.
+      let prevSettled = 0;
+      let prevGrossProfit = 0;
+      try {
+        if (backupKey) {
+          const blob = await kv.get<{
+            snapshot: Record<string, WeekCacheEntry>;
+          }>(backupKey);
+          if (blob && blob.snapshot) {
+            for (const week of Object.values(blob.snapshot)) {
+              prevSettled += week.data?.settled || 0;
+              prevGrossProfit += week.data?.grossProfit || 0;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn(
+          "Scorecard refresh: validation gate could not read backup blob:",
+          e
+        );
+      }
+
+      const settledDropPct =
+        prevSettled > 0 ? (prevSettled - newSettled) / prevSettled : 0;
+      const profitDropPct =
+        prevGrossProfit > 0
+          ? (prevGrossProfit - newGrossProfit) / prevGrossProfit
+          : 0;
+
+      const SETTLED_THRESHOLD = 0.2;
+      const PROFIT_THRESHOLD = 0.2;
+      const PREV_SETTLED_NON_TRIVIAL = 5;
+      const PREV_PROFIT_NON_TRIVIAL = 50_000;
+
+      const settledFailed =
+        prevSettled >= PREV_SETTLED_NON_TRIVIAL &&
+        settledDropPct > SETTLED_THRESHOLD;
+      const profitFailed =
+        prevGrossProfit >= PREV_PROFIT_NON_TRIVIAL &&
+        profitDropPct > PROFIT_THRESHOLD;
+
+      if (settledFailed || profitFailed) {
+        const errMsg = [
+          settledFailed
+            ? `settled dropped ${prevSettled}→${newSettled} (-${Math.round(
+                settledDropPct * 100
+              )}%)`
+            : null,
+          profitFailed
+            ? `grossProfit dropped $${prevGrossProfit.toLocaleString()}→$${newGrossProfit.toLocaleString()} (-${Math.round(
+                profitDropPct * 100
+              )}%)`
+            : null,
+        ]
+          .filter(Boolean)
+          .join("; ");
+
+        const slackText = [
+          ":rotating_light: *Scorecard rebuild aborted — validation gate failed*",
+          `\`?all=true\` rebuild was rejected before writing KV.`,
+          `*Drift:* ${errMsg}`,
+          `*Snapshot:* \`${backupKey}\` (restorable for 7 days)`,
+          `*Action:* check /api/scorecard/refresh logs, then either restore the snapshot or re-run if intentional.`,
+        ].join("\n");
+        await dmAshley(slackText);
+
+        console.error("Scorecard refresh: validation gate failed —", errMsg);
+        return NextResponse.json(
+          {
+            ok: false,
+            error: `Validation failed: ${errMsg}`,
+            threshold: 0.2,
+            backupKey,
+            prev: { settled: prevSettled, grossProfit: prevGrossProfit },
+            next: { settled: newSettled, grossProfit: newGrossProfit },
+          },
+          { status: 500 }
+        );
+      }
+    }
 
     // Decide which weeks to PERSIST.
     let targetKeys: string[];

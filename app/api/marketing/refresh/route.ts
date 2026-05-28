@@ -8,6 +8,7 @@ import {
   weekKey,
 } from "../builder";
 import { BACKUP_KEY_PREFIX, BACKUP_TTL_SECONDS } from "./backup";
+import { dmAshley } from "@/app/lib/slack-dm";
 
 function getAllWeekStartKeys(): string[] {
   const keys: string[] = [];
@@ -114,6 +115,116 @@ export async function GET(request: Request) {
 
     const data = await buildFreshMarketing();
     const refreshedAt = new Date().toISOString();
+
+    // GUARDRAIL 2 — Post-rebuild validation gate (?all=true only).
+    // Marketing settled + grossProfit live inside week.channels[ch]. Sum
+    // across all channels for the YTD comparison.
+    if (allFlag) {
+      const sumWeek = (
+        w: MarketingWeekCacheEntry["data"] | undefined
+      ): { settled: number; grossProfit: number } => {
+        if (!w) return { settled: 0, grossProfit: 0 };
+        let settled = 0;
+        let grossProfit = 0;
+        for (const ch of Object.values(w.channels || {})) {
+          settled += ch.settled || 0;
+          grossProfit += ch.grossProfit || 0;
+        }
+        return { settled, grossProfit };
+      };
+
+      const newTotals = data.weeks.reduce(
+        (acc, w) => {
+          const s = sumWeek(w);
+          acc.settled += s.settled;
+          acc.grossProfit += s.grossProfit;
+          return acc;
+        },
+        { settled: 0, grossProfit: 0 }
+      );
+
+      let prevSettled = 0;
+      let prevGrossProfit = 0;
+      try {
+        if (backupKey) {
+          const blob = await kv.get<{
+            snapshot: Record<string, MarketingWeekCacheEntry>;
+          }>(backupKey);
+          if (blob && blob.snapshot) {
+            for (const entry of Object.values(blob.snapshot)) {
+              const s = sumWeek(entry.data);
+              prevSettled += s.settled;
+              prevGrossProfit += s.grossProfit;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn(
+          "Marketing refresh: validation gate could not read backup blob:",
+          e
+        );
+      }
+
+      const settledDropPct =
+        prevSettled > 0
+          ? (prevSettled - newTotals.settled) / prevSettled
+          : 0;
+      const profitDropPct =
+        prevGrossProfit > 0
+          ? (prevGrossProfit - newTotals.grossProfit) / prevGrossProfit
+          : 0;
+
+      const SETTLED_THRESHOLD = 0.2;
+      const PROFIT_THRESHOLD = 0.2;
+      const PREV_SETTLED_NON_TRIVIAL = 5;
+      const PREV_PROFIT_NON_TRIVIAL = 50_000;
+
+      const settledFailed =
+        prevSettled >= PREV_SETTLED_NON_TRIVIAL &&
+        settledDropPct > SETTLED_THRESHOLD;
+      const profitFailed =
+        prevGrossProfit >= PREV_PROFIT_NON_TRIVIAL &&
+        profitDropPct > PROFIT_THRESHOLD;
+
+      if (settledFailed || profitFailed) {
+        const errMsg = [
+          settledFailed
+            ? `settled dropped ${prevSettled}→${newTotals.settled} (-${Math.round(
+                settledDropPct * 100
+              )}%)`
+            : null,
+          profitFailed
+            ? `grossProfit dropped $${prevGrossProfit.toLocaleString()}→$${newTotals.grossProfit.toLocaleString()} (-${Math.round(
+                profitDropPct * 100
+              )}%)`
+            : null,
+        ]
+          .filter(Boolean)
+          .join("; ");
+
+        const slackText = [
+          ":rotating_light: *Marketing rebuild aborted — validation gate failed*",
+          `\`?all=true\` rebuild was rejected before writing KV.`,
+          `*Drift:* ${errMsg}`,
+          `*Snapshot:* \`${backupKey}\` (restorable for 7 days)`,
+          `*Action:* check /api/marketing/refresh logs, then either restore the snapshot or re-run if intentional.`,
+        ].join("\n");
+        await dmAshley(slackText);
+
+        console.error("Marketing refresh: validation gate failed —", errMsg);
+        return NextResponse.json(
+          {
+            ok: false,
+            error: `Validation failed: ${errMsg}`,
+            threshold: 0.2,
+            backupKey,
+            prev: { settled: prevSettled, grossProfit: prevGrossProfit },
+            next: newTotals,
+          },
+          { status: 500 }
+        );
+      }
+    }
 
     // Decide which weeks to PERSIST per-week.
     let targetKeys: string[];
