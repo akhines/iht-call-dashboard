@@ -5,13 +5,13 @@
       "maxDuration": 60
     },
     "app/api/scorecard/refresh/route.ts": {
-      "maxDuration": 60
+      "maxDuration": 300
     },
     "app/api/marketing/route.ts": {
       "maxDuration": 30
     },
     "app/api/marketing/refresh/route.ts": {
-      "maxDuration": 60
+      "maxDuration": 300
     }
   },
   "crons": [
