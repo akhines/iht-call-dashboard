@@ -52,10 +52,39 @@ const STAGES = {
 const AB_DATE_SIGNED_FIELD = "g4hucgb9oTwMYC9AZmF4";
 const BC_DATE_SIGNED_FIELD = "Lbe97UOqLlo25vZMSt6X";
 
-const CONTACT_TYPE_FIELD = "IfkLFRqVzW9XrCkXvPUQ";
+// CONTACT_TYPE_FIELD removed: leads are now defined by pipeline membership,
+// not the Contact Type custom field. See ACTIVE_SELLER_PIPELINES below.
 const MARKETING_CAMPAIGN_FIELD = "4fOhwf1m5nhK1c9vI6SJ";
 
 const JAN1_2026 = new Date("2026-01-01T00:00:00Z").getTime();
+
+// ============ ACTIVE SELLER PIPELINE WHITELIST ============
+// A "Lead" is a contact whose dateAdded falls in the ET week AND has ≥1 opp
+// in one of these 7 active seller pipelines (any opp status — open/won/lost/abandoned).
+// Excluded by design: Dispo, Wholesalers, Objection Proof, Prospecting.
+const ACTIVE_SELLER_PIPELINES: Record<string, string> = {
+  "6tntgcGDlTyw30KUgRrS": "Leads",
+  "nwSjS0rUTMGbgDvyrEe4": "Mike the Closer",
+  "ggnBpwig6OE37fXPQv7a": "Josh The Closer",
+  "jTIXfKdqlRKALGw8fj4e": "Offer Followup",
+  "ofMQolXiKGyg6WNOJS88": "Transaction Coordination",
+  "DiGXnGTlQCOMZQJmWQe9": "Deals",
+  "WLFdj0t3NfI17P0zuFsX": "Dead/No Opportunity",
+};
+const ACTIVE_SELLER_PIPELINE_IDS = new Set(Object.keys(ACTIVE_SELLER_PIPELINES));
+
+// IHT staff/partner contact IDs — never counted as leads even if they match
+// the pipeline filter. See reference_iht_staff_exclusions.md.
+const STAFF_CONTACT_IDS = new Set([
+  "WEtAovPOBN67adJz671d", // Ashley Hines
+  "c6jnaA1kwoquJ99YBH5t", // Josh
+  "NWn13wL32EF9aK45YrgV", // Mike
+  "CX524fgj8qR5EAxQPN1V", // Nicole
+  "x5TFIus7WluaEKE8BRPd", // Emma
+  "Zman2TPuWizxEu0tFZHe", // admin@
+  "G6qzpAanqlfhO4vt4Cpc", // Michael Aubele
+]);
+const STAFF_EMAIL_SUFFIX = "@theimpacthometeam.com";
 
 // ============ CLOSER USER ID DISCOVERY ============
 // Module-level cache so we only hit /users/search once per cold start.
@@ -183,30 +212,101 @@ async function logClosingLikeStages(): Promise<void> {
   }
 }
 
-// ============ WEEK HELPERS ============
+// ============ WEEK HELPERS (America/New_York, DST-safe) ============
 
 interface Week {
-  start: Date;
-  end: Date;
-  key: string; // "2026-01-05"
+  start: Date;   // Monday 00:00:00 ET (absolute instant)
+  end: Date;     // Sunday 23:59:59 ET (absolute instant)
+  key: string;   // "2026-01-05" — ET-local Monday calendar date
+}
+
+// Get the calendar components of an absolute instant as observed in
+// America/New_York. DST-safe — relies on Intl which honors the IANA tz db.
+function getEtParts(d: Date): { y: number; m: number; day: number; hour: number; min: number; sec: number; weekday: number } {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    weekday: "short",
+    hour12: false,
+  });
+  const parts = fmt.formatToParts(d).reduce<Record<string, string>>((a, p) => {
+    a[p.type] = p.value;
+    return a;
+  }, {});
+  const weekdayMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  // Intl returns hour "24" at midnight in some locales — coerce to 0.
+  const hour = parts.hour === "24" ? 0 : parseInt(parts.hour, 10);
+  return {
+    y: parseInt(parts.year, 10),
+    m: parseInt(parts.month, 10),
+    day: parseInt(parts.day, 10),
+    hour,
+    min: parseInt(parts.minute, 10),
+    sec: parseInt(parts.second, 10),
+    weekday: weekdayMap[parts.weekday] ?? 0,
+  };
+}
+
+// Build an absolute Date that represents the given ET wall-clock instant
+// (y, m, day, hour, min, sec). Solves the inverse of getEtParts. Works around
+// DST gaps/overlaps by iterating until the round-trip matches.
+function etWallClockToDate(y: number, m: number, day: number, hour = 0, min = 0, sec = 0): Date {
+  // First guess: treat the wall clock as UTC, then adjust by the ET offset
+  // we observe for that instant.
+  const guess = new Date(Date.UTC(y, m - 1, day, hour, min, sec));
+  const parts = getEtParts(guess);
+  // Diff: the wall clock we want vs. what the guess actually renders as in ET.
+  const targetMs = Date.UTC(y, m - 1, day, hour, min, sec);
+  const renderedMs = Date.UTC(parts.y, parts.m - 1, parts.day, parts.hour, parts.min, parts.sec);
+  const offsetMs = targetMs - renderedMs;
+  return new Date(guess.getTime() + offsetMs);
+}
+
+function etDateKey(y: number, m: number, day: number): string {
+  return `${y.toString().padStart(4, "0")}-${m.toString().padStart(2, "0")}-${day.toString().padStart(2, "0")}`;
 }
 
 function getWeeks2026(): Week[] {
   const weeks: Week[] = [];
-  const current = new Date("2026-01-05T00:00:00Z");
+  // Anchor: Monday 2026-01-05 00:00:00 ET
+  let mondayY = 2026;
+  let mondayM = 1;
+  let mondayD = 5;
   const now = new Date();
 
-  while (current < now) {
-    const end = new Date(current);
-    end.setDate(end.getDate() + 6);
-    if (end.getTime() < now.getTime()) {
+  while (true) {
+    const start = etWallClockToDate(mondayY, mondayM, mondayD, 0, 0, 0);
+    // End = Sunday 23:59:59 ET, i.e. +6 days at 23:59:59
+    const nextMondayDate = new Date(start.getTime() + 7 * 86400000);
+    const nextMondayParts = getEtParts(nextMondayDate);
+    const end = etWallClockToDate(
+      nextMondayParts.y, nextMondayParts.m, nextMondayParts.day, 0, 0, 0
+    );
+    // end is the absolute instant of NEXT Monday 00:00 ET. Subtract 1s to land on
+    // Sunday 23:59:59 ET.
+    const sundayEnd = new Date(end.getTime() - 1000);
+
+    // Only include weeks whose Sunday-end has already passed (i.e. fully closed weeks).
+    if (sundayEnd.getTime() < now.getTime()) {
       weeks.push({
-        start: new Date(current),
-        end: new Date(end),
-        key: current.toISOString().slice(0, 10),
+        start,
+        end: sundayEnd,
+        key: etDateKey(mondayY, mondayM, mondayD),
       });
+    } else {
+      break;
     }
-    current.setDate(current.getDate() + 7);
+
+    // Advance Monday by 7 ET days. Compute via the absolute next Monday and
+    // re-extract its ET wall-clock components (handles DST shifts cleanly).
+    mondayY = nextMondayParts.y;
+    mondayM = nextMondayParts.m;
+    mondayD = nextMondayParts.day;
   }
   return weeks;
 }
@@ -214,7 +314,7 @@ function getWeeks2026(): Week[] {
 function findWeekKey(date: Date, weeks: Week[]): string | null {
   const t = date.getTime();
   for (const w of weeks) {
-    if (t >= w.start.getTime() && t <= w.end.getTime() + 86400000) {
+    if (t >= w.start.getTime() && t <= w.end.getTime()) {
       return w.key;
     }
   }
@@ -247,6 +347,19 @@ export interface MonthSplit {
 }
 export type MonthSplits = Record<string, MonthSplit>;
 
+// Per-contact lead detail captured by fetchAllSellerContacts2026 and
+// surfaced in the per-week scorecard payload for the drilldown UI.
+export interface LeadRecord {
+  contactId: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  dateAdded: number;
+  primaryPipelineId: string;
+  primaryPipelineName: string;
+  source: string;
+}
+
 export interface WeekData {
   startDate: string;
   endDate: string;
@@ -259,6 +372,14 @@ export interface WeekData {
   connectRate: number;
   leads: number;
   prospects: number;
+  // New drilldown fields populated by the pipeline-based leads rewrite.
+  // Counts per whitelisted pipeline ID (e.g. { "6tntgcGDlTyw30KUgRrS": 8, ... })
+  leadsByPipeline?: Record<string, number>;
+  // Counts per resolved source string (Marketing Campaign field → contact.source → "Unknown")
+  leadsByChannel?: Record<string, number>;
+  // Full per-lead detail, sorted by dateAdded ascending. Drives the scrollable
+  // drilldown list with names linked to GHL contact detail pages.
+  leadDetails?: LeadRecord[];
   bookingPct: number;
   inPersonBooked: number;
   virtualBooked: number;
@@ -318,86 +439,159 @@ export interface WeekCacheEntry {
 }
 
 // Compute the (current + last completed) Monday keys we want to refresh on
-// the weekly cron. Returns the list of Monday-ISO keys that the default cron
+// the weekly cron. Returns the list of Monday-ET keys that the default cron
 // invocation should rebuild — every other week stays locked.
+// Matches getWeeks2026 which uses ET Monday-anchored weeks.
 export function getCronTargetWeekKeys(now: Date = new Date()): string[] {
-  // Find this week's Monday in UTC (matches getWeeks2026 which uses UTC Mondays).
-  const t = new Date(now);
-  t.setUTCHours(0, 0, 0, 0);
-  // getUTCDay: 0 Sun … 1 Mon … 6 Sat
-  const day = t.getUTCDay();
-  const offsetToMonday = day === 0 ? -6 : 1 - day;
-  t.setUTCDate(t.getUTCDate() + offsetToMonday);
-  const thisMonday = t.toISOString().slice(0, 10);
-  const lastMonday = new Date(t);
-  lastMonday.setUTCDate(lastMonday.getUTCDate() - 7);
-  return [lastMonday.toISOString().slice(0, 10), thisMonday];
+  // Walk back from now's ET wall-clock date to the most recent Monday.
+  const parts = getEtParts(now);
+  // weekday: 0=Sun, 1=Mon, ..., 6=Sat. Offset to current Monday.
+  const offsetToMonday = parts.weekday === 0 ? -6 : 1 - parts.weekday;
+  const todayAtMidnightEt = etWallClockToDate(parts.y, parts.m, parts.day, 0, 0, 0);
+  const thisMondayInstant = new Date(todayAtMidnightEt.getTime() + offsetToMonday * 86400000);
+  const thisMondayParts = getEtParts(thisMondayInstant);
+  const thisMonday = etDateKey(thisMondayParts.y, thisMondayParts.m, thisMondayParts.day);
+  const lastMondayInstant = new Date(thisMondayInstant.getTime() - 7 * 86400000);
+  const lastMondayParts = getEtParts(lastMondayInstant);
+  const lastMonday = etDateKey(lastMondayParts.y, lastMondayParts.m, lastMondayParts.day);
+  return [lastMonday, thisMonday];
 }
 
 // ============ DATA FETCHERS ============
 
-interface SellerContact {
-  dateAdded: number;
-  hasAddress: boolean;
-  source: string;
-}
+// Public type: per-contact lead detail. New pipeline-based logic — a "Lead" is
+// a contact whose dateAdded is in 2026 AND has at least one opportunity in the
+// active seller pipeline whitelist (any opp status). Contact Type + address1
+// are no longer used as filters.
+async function fetchAllSellerContacts2026(): Promise<LeadRecord[]> {
+  const leads: LeadRecord[] = [];
+  const nowIso = new Date().toISOString();
+  const jan1Iso = new Date(JAN1_2026).toISOString();
 
-async function fetchAllSellerContacts2026(): Promise<SellerContact[]> {
-  const sellers: SellerContact[] = [];
-  let startAfterId = "";
-  let startAfter = 0;
+  let searchAfter: (string | number)[] | undefined = undefined;
+  let pageCount = 0;
+  const MAX_PAGES = 100; // safety cap; 100 * 100 = 10k contacts/year ceiling
 
-  for (let page = 0; page < 50; page++) {
-    let url = `${BASE}/contacts/?locationId=${LOCATION_ID()}&limit=100`;
-    if (startAfterId) url += `&startAfterId=${startAfterId}&startAfter=${startAfter}`;
+  while (pageCount < MAX_PAGES) {
+    pageCount++;
+    const body: Record<string, unknown> = {
+      locationId: LOCATION_ID(),
+      pageLimit: 100,
+      filters: [
+        {
+          field: "dateAdded",
+          operator: "range",
+          value: { gte: jan1Iso, lte: nowIso },
+        },
+      ],
+      sort: [{ field: "dateAdded", direction: "asc" }],
+    };
+    if (searchAfter) body.searchAfter = searchAfter;
 
-    const res = await fetch(url, { headers: getHeaders() });
-    if (!res.ok) break;
+    const res = await fetch(`${BASE}/contacts/search`, {
+      method: "POST",
+      headers: { ...getHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      console.warn(
+        `[Scorecard] /contacts/search failed (${res.status}) on page ${pageCount}: ${await res.text().catch(() => "")}`
+      );
+      break;
+    }
     const data = await res.json();
     const contacts = data.contacts || [];
     if (contacts.length === 0) break;
 
     for (const c of contacts) {
-      const created = new Date(c.dateAdded).getTime();
-      if (created < JAN1_2026) continue;
+      const cid = c.id || "";
+      if (!cid) continue;
+      if (STAFF_CONTACT_IDS.has(cid)) continue;
+      const email = (c.email || "").toLowerCase();
+      if (email && email.endsWith(STAFF_EMAIL_SUFFIX)) continue;
 
+      const createdMs = c.dateAdded ? new Date(c.dateAdded).getTime() : 0;
+      if (!createdMs || createdMs < JAN1_2026) continue;
+
+      const opps: Array<{
+        id?: string;
+        pipelineId?: string;
+        lastStageChangeAt?: string;
+        createdAt?: string;
+      }> = c.opportunities || [];
+      // Find whitelisted opps. Pick the most-recent-stage-change one as the
+      // primary; if none have lastStageChangeAt, fall back to first match.
+      let primaryPipelineId = "";
+      let primaryStageChangeMs = -1;
+      for (const o of opps) {
+        const pid = o.pipelineId || "";
+        if (!ACTIVE_SELLER_PIPELINE_IDS.has(pid)) continue;
+        const t = o.lastStageChangeAt ? new Date(o.lastStageChangeAt).getTime() : 0;
+        if (t > primaryStageChangeMs) {
+          primaryStageChangeMs = t;
+          primaryPipelineId = pid;
+        }
+      }
+      if (!primaryPipelineId) continue; // no whitelisted opp → not a Lead
+
+      // Resolve source: Marketing Campaign custom field → contact.source → "Unknown"
       const cfs: Record<string, string> = {};
-      for (const cf of c.customFields || []) cfs[cf.id] = cf.value;
+      for (const cf of c.customFields || []) {
+        // /contacts/search returns customFields[].value (some legacy uses .fieldValue too)
+        const val = cf.value ?? cf.fieldValue ?? cf.fieldValueString ?? "";
+        if (cf.id) cfs[cf.id] = String(val);
+      }
+      const campaign = (cfs[MARKETING_CAMPAIGN_FIELD] || "").trim();
+      const contactSource = (c.source || "").trim();
+      const source = campaign || contactSource || "Unknown";
 
-      // Pre-populate the source cache from the listing's customFields so
-      // downstream settled detection doesn't have to re-fetch each contact
-      // individually (which rate-limits and silently caches "Other").
-      //
-      // GUARDRAIL 3: Only cache when we actually resolved a source. Caching
-      // "Other" on a listing row that happened to have empty source+campaign
-      // permanently buries the real value (the dedicated contact fetch
-      // would have populated customFields more fully). Leave the slot
-      // unset → getContactSource will run a targeted fetch next time.
-      if (c.id) {
-        const campaign = cfs[MARKETING_CAMPAIGN_FIELD] || "";
-        const resolved = campaign || c.source || "";
-        if (resolved) contactSourceCache.set(c.id, resolved);
+      // Warm the contact source cache so downstream getContactSource hits don't
+      // need to re-fetch this contact. GUARDRAIL 3: only cache when resolved
+      // beyond "Unknown".
+      if (campaign || contactSource) {
+        contactSourceCache.set(cid, campaign || contactSource);
       }
 
-      if (cfs[CONTACT_TYPE_FIELD] === "Seller") {
-        sellers.push({
-          dateAdded: created,
-          hasAddress: !!(c.address1 && c.address1.trim()),
-          source: cfs[MARKETING_CAMPAIGN_FIELD] || c.source || "",
-        });
-      }
+      leads.push({
+        contactId: cid,
+        firstName: (c.firstName || "").trim(),
+        lastName: (c.lastName || "").trim(),
+        email,
+        dateAdded: createdMs,
+        primaryPipelineId,
+        primaryPipelineName: ACTIVE_SELLER_PIPELINES[primaryPipelineId] || "",
+        source,
+      });
     }
 
-    const meta = data.meta || {};
-    if (!meta.nextPageUrl) break;
-    startAfterId = meta.startAfterId || "";
-    startAfter = meta.startAfter || 0;
-
-    const lastCreated = new Date(contacts[contacts.length - 1].dateAdded).getTime();
-    if (lastCreated < JAN1_2026) break;
+    // Cursor for next page. /contacts/search returns `searchAfter` on data
+    // or each contact carries a sort cursor; the official pattern is to
+    // read it from the last contact's `searchAfter` field, or from
+    // `meta.searchAfter` / `data.searchAfter`. Defensive: try each.
+    const last = contacts[contacts.length - 1];
+    const nextCursor =
+      (data.searchAfter as (string | number)[] | undefined) ||
+      (data.meta?.searchAfter as (string | number)[] | undefined) ||
+      (last && (last.searchAfter as (string | number)[] | undefined));
+    if (!nextCursor || (Array.isArray(nextCursor) && nextCursor.length === 0)) break;
+    if (
+      searchAfter &&
+      JSON.stringify(searchAfter) === JSON.stringify(nextCursor)
+    ) {
+      // Cursor didn't advance — bail to avoid infinite loop.
+      break;
+    }
+    searchAfter = nextCursor;
+    if (contacts.length < 100) break;
   }
 
-  return sellers;
+  console.log(
+    `[Scorecard] fetchAllSellerContacts2026: ${leads.length} leads across ${pageCount} pages (pipeline-whitelisted)`
+  );
+
+  // Sort ascending by dateAdded for stable drilldown order.
+  leads.sort((a, b) => a.dateAdded - b.dateAdded);
+  return leads;
 }
 
 interface ApptRecord {
@@ -896,14 +1090,14 @@ export async function buildFreshScorecard(): Promise<ScorecardData> {
   joshCalendarLatest.clear();
   // Calendars MUST resolve before opportunities so resolveCloser can use them
   // for TC pipeline attribution (when GHL assignedTo is Emma/empty).
-  const [allCalls, allSellers, allAppts] = await Promise.all([
+  const [allCalls, allLeads, allAppts] = await Promise.all([
     fetchAllCalls2026(),
     fetchAllSellerContacts2026(),
     fetchAllAppointments2026(),
   ]);
   const allOpps = await fetchAllOpportunities2026();
   console.log(
-    `Scorecard: ${allCalls.length} calls, ${allSellers.length} sellers, ${allAppts.length} appts, ${allOpps.length} opps`
+    `Scorecard: ${allCalls.length} calls, ${allLeads.length} leads, ${allAppts.length} appts, ${allOpps.length} opps`
   );
 
   const weekData: WeekData[] = weeks.map((w) => {
@@ -926,12 +1120,23 @@ export async function buildFreshScorecard(): Promise<ScorecardData> {
         ? Math.round(totalDuration / connectedCalls.length)
         : 0;
 
-    const weekSellers = allSellers.filter((s) => {
-      const wk = findWeekKey(new Date(s.dateAdded), weeks);
+    const weekLeads = allLeads.filter((l) => {
+      const wk = findWeekKey(new Date(l.dateAdded), weeks);
       return wk === w.key;
     });
-    const leads = weekSellers.filter((s) => s.hasAddress).length;
-    const prospects = weekSellers.length;
+    const leads = weekLeads.length;
+    // `prospects` retained on the payload for backward-compat with any caller
+    // still reading the old shape — mirrors `leads` until the column is
+    // removed from the UI in a follow-up.
+    const prospects = leads;
+
+    const leadsByPipeline: Record<string, number> = {};
+    const leadsByChannel: Record<string, number> = {};
+    for (const l of weekLeads) {
+      leadsByPipeline[l.primaryPipelineId] = (leadsByPipeline[l.primaryPipelineId] || 0) + 1;
+      const ch = l.source || "Unknown";
+      leadsByChannel[ch] = (leadsByChannel[ch] || 0) + 1;
+    }
 
     const weekAppts = allAppts.filter((a) => {
       const wk = findWeekKey(new Date(a.date), weeks);
@@ -964,12 +1169,10 @@ export async function buildFreshScorecard(): Promise<ScorecardData> {
     const grossProfit = settledOpps.reduce((a, o) => a + o.monetaryValue, 0);
 
     const leadsBySource: SourceBreakdown = {};
-    weekSellers
-      .filter((s) => s.hasAddress)
-      .forEach((s) => {
-        const src = s.source || "Unknown";
-        leadsBySource[src] = (leadsBySource[src] || 0) + 1;
-      });
+    weekLeads.forEach((l) => {
+      const src = l.source || "Unknown";
+      leadsBySource[src] = (leadsBySource[src] || 0) + 1;
+    });
 
     const apptsBySource: SourceBreakdown = {};
     weekAppts
@@ -1002,9 +1205,9 @@ export async function buildFreshScorecard(): Promise<ScorecardData> {
     // its end month, partition the date-anchored metrics (settled / grossProfit /
     // abSigned / offers) by each event's actual month. Page uses this in
     // monthlySummaries so e.g. a deal closed 4/3 in week 3/30–4/5 lands in
-    // April, not March.
-    const startMonthIdx = w.start.getUTCMonth();
-    const endMonthIdx = w.end.getUTCMonth();
+    // April, not March. ET-anchored to match the new week boundary logic.
+    const startMonthIdx = getEtParts(w.start).m - 1;
+    const endMonthIdx = getEtParts(w.end).m - 1;
     let monthSplits: MonthSplits | undefined;
     if (startMonthIdx !== endMonthIdx) {
       const splits: MonthSplits = {};
@@ -1023,7 +1226,7 @@ export async function buildFreshScorecard(): Promise<ScorecardData> {
       const monthNameOf = (ms: number): string =>
         new Date(ms).toLocaleString("en-US", {
           month: "long",
-          timeZone: "UTC",
+          timeZone: "America/New_York",
         }).toLowerCase();
       for (const o of weekOpps) {
         const mName = monthNameOf(o.date);
@@ -1042,9 +1245,13 @@ export async function buildFreshScorecard(): Promise<ScorecardData> {
       monthSplits = splits;
     }
 
+    // startDate / endDate use ET-local calendar dates so a week labeled
+    // "2026-05-18" reads the same as the GHL Monday it represents in ET.
+    const startEt = getEtParts(w.start);
+    const endEt = getEtParts(w.end);
     return {
-      startDate: w.start.toISOString().slice(0, 10),
-      endDate: w.end.toISOString().slice(0, 10),
+      startDate: etDateKey(startEt.y, startEt.m, startEt.day),
+      endDate: etDateKey(endEt.y, endEt.m, endEt.day),
       dials,
       totalInbound,
       pickUpRate:
@@ -1060,6 +1267,9 @@ export async function buildFreshScorecard(): Promise<ScorecardData> {
           : 0,
       leads,
       prospects,
+      leadsByPipeline,
+      leadsByChannel,
+      leadDetails: weekLeads,
       bookingPct:
         leads > 0 ? Math.round((totalBooked / leads) * 10000) / 100 : 0,
       inPersonBooked,

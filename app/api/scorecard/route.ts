@@ -11,19 +11,27 @@ import {
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-// Compute every Monday-week key from 2026-01-05 → today, matching getWeeks2026
-// in the builder. Used by GET to know which per-week KV keys to mget.
+// Compute every Monday-week key from 2026-01-05 → today, matching
+// getWeeks2026 in the builder. Used by GET to know which per-week KV keys
+// to mget. Keys are ET-local YYYY-MM-DD strings aligned to ET Mondays.
 function getAllWeekStartKeys(): string[] {
   const keys: string[] = [];
-  const current = new Date("2026-01-05T00:00:00Z");
+  // Anchor: Monday 2026-01-05 ET. Use a noon-ET timestamp so daylight-saving
+  // transitions can't bump us to a different calendar date.
+  const anchor = new Date("2026-01-05T17:00:00Z"); // 12:00 noon ET (EST)
   const now = new Date();
-  while (current < now) {
-    const end = new Date(current);
-    end.setDate(end.getDate() + 6);
-    if (end.getTime() < now.getTime()) {
-      keys.push(current.toISOString().slice(0, 10));
-    }
-    current.setDate(current.getDate() + 7);
+  for (let weekIdx = 0; weekIdx < 520; weekIdx++) {
+    const startInstant = new Date(anchor.getTime() + weekIdx * 7 * 86400000);
+    const endInstant = new Date(startInstant.getTime() + 6 * 86400000);
+    if (endInstant.getTime() >= now.getTime()) break;
+    // ET date key from the noon-ET start instant.
+    const etDate = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/New_York",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(startInstant);
+    keys.push(etDate);
   }
   return keys;
 }
