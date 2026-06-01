@@ -659,11 +659,26 @@ async function fetchAllSellerContacts2026(): Promise<LeadRecord[]> {
     await sleep(150);
   }
 
+  // Concurrency limit for the per-contact detail + inbound checks. Tuned
+  // against GHL's 429 budget — 8 in-flight observed safe in BCDI scraper.
+  const PER_CONTACT_CONCURRENCY = 8;
+
   async function processContacts(contacts: Array<Record<string, unknown>>) {
     let bcdiExcluded = 0;
     let lcPhoneApiChecked = 0;
     let lcPhoneApiExcluded = 0;
 
+    // ----- Pass 1 (synchronous): apply all cheap filters and collect the
+    // survivors that need the per-contact GET. Exclusion 4 (BCDI) happens
+    // here — no API call required.
+    type Candidate = {
+      cid: string;
+      c: Record<string, unknown>;
+      membership: { pipelineId: string; stageMs: number };
+      createdMs: number;
+      contactSourceRaw: string;
+    };
+    const candidates: Candidate[] = [];
     for (const c of contacts) {
       const cid = (c.id as string) || "";
       if (!cid || seen.has(cid)) continue;
@@ -673,56 +688,71 @@ async function fetchAllSellerContacts2026(): Promise<LeadRecord[]> {
       if (email && email.endsWith(STAFF_EMAIL_SUFFIX)) continue;
 
       const membership = contactToPipeline.get(cid);
-      if (!membership) continue; // contact has no opp in any whitelisted pipeline
+      if (!membership) continue;
 
       const createdMs = c.dateAdded ? new Date(c.dateAdded as string).getTime() : 0;
       if (!createdMs || createdMs < JAN1_2026) continue;
 
-      // ========================================================
       // Exclusion 4 (BCDI categorical) — see project_scorecard_leads_rule.md.
-      // BCDI-* sources are outbound prospecting lists, never inbound leads.
-      // Cheap string match — runs before any extra API calls.
-      // ========================================================
       const contactSourceRaw = ((c.source as string) || "").trim();
       if (BCDI_SOURCE_PATTERN.test(contactSourceRaw)) {
         bcdiExcluded++;
         continue;
       }
 
-      // ========================================================
-      // Exclusion 3 (lc-phone-api outbound-only) — see
-      // project_scorecard_leads_rule.md. /contacts/search strips createdBy,
-      // so we must GET /contacts/{id} for every survivor to discover the
-      // createdBy.source. When source === "lc-phone-api" AND no inbound
-      // messages exist anywhere in the contact's conversation history,
-      // exclude — rep dialed out, seller never engaged.
-      // ========================================================
-      const detailRes = await fetchWith429Retry(`${BASE}/contacts/${cid}`);
-      let createdBySource = "";
-      if (detailRes && detailRes.ok) {
-        const detail = await detailRes.json();
-        const createdBy = (detail?.contact?.createdBy || {}) as {
-          source?: string;
-        };
-        createdBySource = (createdBy.source || "").trim();
-      }
-      // Inter-contact pacing — keeps us below GHL's burst limit during the
-      // ~462 detail fetches.
-      await sleep(150);
+      candidates.push({ cid, c, membership, createdMs, contactSourceRaw });
+    }
 
-      if (createdBySource === LC_PHONE_API_SOURCE) {
-        lcPhoneApiChecked++;
-        const inbound = await hasInbound(cid);
-        // Short pause between contacts that triggered the inbound check.
-        await sleep(150);
-        if (inbound === false) {
-          // Verified all-outbound — exclude. If inbound === null (API failed),
-          // err on the side of keeping the lead.
+    // ----- Pass 2: parallel detail fetches (capped concurrency) to discover
+    // createdBy.source. /contacts/search strips that field, so we must GET
+    // /contacts/{id} for every survivor. Each batch settles before the next
+    // starts — keeps in-flight requests bounded at PER_CONTACT_CONCURRENCY.
+    const createdBySourceByCid = new Map<string, string>();
+    for (let i = 0; i < candidates.length; i += PER_CONTACT_CONCURRENCY) {
+      const slice = candidates.slice(i, i + PER_CONTACT_CONCURRENCY);
+      const results = await Promise.all(
+        slice.map(async (cand) => {
+          const r = await fetchWith429Retry(`${BASE}/contacts/${cand.cid}`);
+          if (!r || !r.ok) return "";
+          const detail = await r.json();
+          const createdBy = (detail?.contact?.createdBy || {}) as {
+            source?: string;
+          };
+          return (createdBy.source || "").trim();
+        })
+      );
+      for (let j = 0; j < slice.length; j++) {
+        createdBySourceByCid.set(slice[j].cid, results[j]);
+      }
+      // Light pacing between batches.
+      await sleep(80);
+    }
+
+    // ----- Pass 3: for candidates whose createdBy.source === lc-phone-api,
+    // run the inbound check in parallel batches. Exclusion 3.
+    const lcPhoneApiCands = candidates.filter(
+      (cand) => createdBySourceByCid.get(cand.cid) === LC_PHONE_API_SOURCE
+    );
+    lcPhoneApiChecked += lcPhoneApiCands.length;
+    const excludedCids = new Set<string>();
+    for (let i = 0; i < lcPhoneApiCands.length; i += PER_CONTACT_CONCURRENCY) {
+      const slice = lcPhoneApiCands.slice(i, i + PER_CONTACT_CONCURRENCY);
+      const results = await Promise.all(slice.map((cand) => hasInbound(cand.cid)));
+      for (let j = 0; j < slice.length; j++) {
+        // inbound === false → confirmed all-outbound → exclude.
+        // inbound === null → API failure → keep (never exclude on failure).
+        if (results[j] === false) {
+          excludedCids.add(slice[j].cid);
           lcPhoneApiExcluded++;
-          continue;
         }
       }
+      await sleep(80);
+    }
 
+    // ----- Pass 4: emit LeadRecord for every candidate that survived.
+    for (const cand of candidates) {
+      if (excludedCids.has(cand.cid)) continue;
+      const { c, cid, membership, createdMs, contactSourceRaw } = cand;
       const cfs: Record<string, string> = {};
       const customFields = (c.customFields as Array<{
         id?: string;
@@ -735,18 +765,17 @@ async function fetchAllSellerContacts2026(): Promise<LeadRecord[]> {
         if (cf.id) cfs[cf.id] = String(val);
       }
       const campaign = (cfs[MARKETING_CAMPAIGN_FIELD] || "").trim();
-      const contactSource = contactSourceRaw;
-      const source = campaign || contactSource || "Unknown";
+      const source = campaign || contactSourceRaw || "Unknown";
 
-      if (campaign || contactSource) {
-        contactSourceCache.set(cid, campaign || contactSource);
+      if (campaign || contactSourceRaw) {
+        contactSourceCache.set(cid, campaign || contactSourceRaw);
       }
 
       leads.push({
         contactId: cid,
         firstName: ((c.firstName as string) || "").trim(),
         lastName: ((c.lastName as string) || "").trim(),
-        email,
+        email: ((c.email as string) || "").toLowerCase(),
         dateAdded: createdMs,
         primaryPipelineId: membership.pipelineId,
         primaryPipelineName: ACTIVE_SELLER_PIPELINES[membership.pipelineId] || "",
@@ -756,7 +785,7 @@ async function fetchAllSellerContacts2026(): Promise<LeadRecord[]> {
 
     if (bcdiExcluded || lcPhoneApiChecked) {
       console.log(
-        `[Scorecard] Exclusion stats (page batch): BCDI=${bcdiExcluded} lcPhoneApiChecked=${lcPhoneApiChecked} lcPhoneApiExcluded=${lcPhoneApiExcluded}`
+        `[Scorecard] Exclusion stats (page batch): candidates=${candidates.length} BCDI=${bcdiExcluded} lcPhoneApiChecked=${lcPhoneApiChecked} lcPhoneApiExcluded=${lcPhoneApiExcluded}`
       );
     }
   }
