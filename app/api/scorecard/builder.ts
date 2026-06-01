@@ -86,6 +86,18 @@ const STAFF_CONTACT_IDS = new Set([
 ]);
 const STAFF_EMAIL_SUFFIX = "@theimpacthometeam.com";
 
+// Outbound-only exclusion: contacts auto-created when a rep dialed an unknown
+// number. createdBy.source === "lc-phone-api" + zero inbound messages anywhere
+// in the conversation history → outbound dial-out, seller never engaged.
+// See project_scorecard_leads_rule.md (Exclusion 3).
+const LC_PHONE_API_SOURCE = "lc-phone-api";
+
+// BCDI categorical exclusion: any contact whose `source` matches /^BCDI/i is
+// an outbound prospecting target from a BCDI list (BCDI-CaseSearch, BCDI-ROW,
+// BCDI-VacantList, BCDI-Estate, etc.) — not an inbound lead. Categorical
+// regardless of engagement. See project_scorecard_leads_rule.md (Exclusion 4).
+const BCDI_SOURCE_PATTERN = /^BCDI/i;
+
 // ============ CLOSER USER ID DISCOVERY ============
 // Module-level cache so we only hit /users/search once per cold start.
 let mikeUserId: string | null = null;
@@ -554,6 +566,62 @@ async function fetchAllSellerContacts2026(): Promise<LeadRecord[]> {
   const PAGE_LIMIT = 100;
   const MAX_PAGES = 200; // safety cap; covers ~20k contacts/year
 
+  // Per-contact helpers for the two outbound exclusions. Run AFTER the cheap
+  // whitelist + staff + BCDI filters, so we only spend API calls on contacts
+  // that would otherwise become leads.
+  //
+  // hasInbound(contactId):
+  //   Short-circuit via /conversations/search?contactId=… — if ANY thread's
+  //   lastMessageDirection is "inbound", contact has inbound, no message
+  //   pagination needed. Only when every thread is outbound do we paginate
+  //   /conversations/{id}/messages to scan for any inbound. Returns true if
+  //   we find inbound, false if confirmed all-outbound, null on API failure
+  //   (treat null as "keep" — never exclude on API failure).
+  async function hasInbound(contactId: string): Promise<boolean | null> {
+    const convRes = await fetchWith429Retry(
+      `${BASE}/conversations/search?locationId=${LOCATION_ID()}&contactId=${contactId}`
+    );
+    if (!convRes || !convRes.ok) return null;
+    const convData = await convRes.json();
+    const threads: Array<{ id?: string; lastMessageDirection?: string }> =
+      convData.conversations || [];
+    if (threads.length === 0) return false; // no threads at all → no inbound
+    // Short-circuit: any thread with lastMessageDirection === "inbound" → keep.
+    for (const t of threads) {
+      if (t.lastMessageDirection === "inbound") return true;
+    }
+    // All threads' last message is outbound — but earlier messages in a thread
+    // could be inbound. Paginate messages for each thread until inbound found
+    // or all exhausted.
+    for (const t of threads) {
+      if (!t.id) continue;
+      let nextPage: string | null = null;
+      let scanned = 0;
+      const MAX_MSG_PAGES = 10; // safety cap; ~1000 messages per thread max
+      for (let p = 0; p < MAX_MSG_PAGES; p++) {
+        const url = nextPage
+          ? `${BASE}/conversations/${t.id}/messages?lastMessageId=${nextPage}`
+          : `${BASE}/conversations/${t.id}/messages`;
+        const r = await fetchWith429Retry(url);
+        if (!r || !r.ok) break;
+        const body = await r.json();
+        // Endpoint returns { messages: { messages: [...], nextPage } }
+        const inner = body.messages || body;
+        const msgs: Array<{ direction?: string }> = inner.messages || [];
+        scanned += msgs.length;
+        for (const m of msgs) {
+          if (m.direction === "inbound") return true;
+        }
+        const np = inner.nextPage;
+        if (!np) break;
+        nextPage = np;
+        await sleep(150);
+      }
+      void scanned;
+    }
+    return false; // verified all-outbound across every thread + page
+  }
+
   while (page <= MAX_PAGES) {
     const body = {
       locationId: LOCATION_ID(),
@@ -584,14 +652,18 @@ async function fetchAllSellerContacts2026(): Promise<LeadRecord[]> {
     const data = await res.json();
     const contacts = data.contacts || [];
     if (contacts.length === 0) break;
-    processContacts(contacts);
+    await processContacts(contacts);
     if (contacts.length < PAGE_LIMIT) break;
     page++;
     // Pace requests to keep the 429 budget healthy through ~1500 contacts.
     await sleep(150);
   }
 
-  function processContacts(contacts: Array<Record<string, unknown>>) {
+  async function processContacts(contacts: Array<Record<string, unknown>>) {
+    let bcdiExcluded = 0;
+    let lcPhoneApiChecked = 0;
+    let lcPhoneApiExcluded = 0;
+
     for (const c of contacts) {
       const cid = (c.id as string) || "";
       if (!cid || seen.has(cid)) continue;
@@ -606,6 +678,51 @@ async function fetchAllSellerContacts2026(): Promise<LeadRecord[]> {
       const createdMs = c.dateAdded ? new Date(c.dateAdded as string).getTime() : 0;
       if (!createdMs || createdMs < JAN1_2026) continue;
 
+      // ========================================================
+      // Exclusion 4 (BCDI categorical) — see project_scorecard_leads_rule.md.
+      // BCDI-* sources are outbound prospecting lists, never inbound leads.
+      // Cheap string match — runs before any extra API calls.
+      // ========================================================
+      const contactSourceRaw = ((c.source as string) || "").trim();
+      if (BCDI_SOURCE_PATTERN.test(contactSourceRaw)) {
+        bcdiExcluded++;
+        continue;
+      }
+
+      // ========================================================
+      // Exclusion 3 (lc-phone-api outbound-only) — see
+      // project_scorecard_leads_rule.md. /contacts/search strips createdBy,
+      // so we must GET /contacts/{id} for every survivor to discover the
+      // createdBy.source. When source === "lc-phone-api" AND no inbound
+      // messages exist anywhere in the contact's conversation history,
+      // exclude — rep dialed out, seller never engaged.
+      // ========================================================
+      const detailRes = await fetchWith429Retry(`${BASE}/contacts/${cid}`);
+      let createdBySource = "";
+      if (detailRes && detailRes.ok) {
+        const detail = await detailRes.json();
+        const createdBy = (detail?.contact?.createdBy || {}) as {
+          source?: string;
+        };
+        createdBySource = (createdBy.source || "").trim();
+      }
+      // Inter-contact pacing — keeps us below GHL's burst limit during the
+      // ~462 detail fetches.
+      await sleep(150);
+
+      if (createdBySource === LC_PHONE_API_SOURCE) {
+        lcPhoneApiChecked++;
+        const inbound = await hasInbound(cid);
+        // Short pause between contacts that triggered the inbound check.
+        await sleep(150);
+        if (inbound === false) {
+          // Verified all-outbound — exclude. If inbound === null (API failed),
+          // err on the side of keeping the lead.
+          lcPhoneApiExcluded++;
+          continue;
+        }
+      }
+
       const cfs: Record<string, string> = {};
       const customFields = (c.customFields as Array<{
         id?: string;
@@ -618,7 +735,7 @@ async function fetchAllSellerContacts2026(): Promise<LeadRecord[]> {
         if (cf.id) cfs[cf.id] = String(val);
       }
       const campaign = (cfs[MARKETING_CAMPAIGN_FIELD] || "").trim();
-      const contactSource = ((c.source as string) || "").trim();
+      const contactSource = contactSourceRaw;
       const source = campaign || contactSource || "Unknown";
 
       if (campaign || contactSource) {
@@ -635,6 +752,12 @@ async function fetchAllSellerContacts2026(): Promise<LeadRecord[]> {
         primaryPipelineName: ACTIVE_SELLER_PIPELINES[membership.pipelineId] || "",
         source,
       });
+    }
+
+    if (bcdiExcluded || lcPhoneApiChecked) {
+      console.log(
+        `[Scorecard] Exclusion stats (page batch): BCDI=${bcdiExcluded} lcPhoneApiChecked=${lcPhoneApiChecked} lcPhoneApiExcluded=${lcPhoneApiExcluded}`
+      );
     }
   }
 
