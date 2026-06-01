@@ -2,6 +2,7 @@ import { kv } from "@vercel/kv";
 import {
   FRESH_KEY as SCORECARD_FRESH_KEY,
   weekKey as scorecardWeekKey,
+  fetchAllSellerContacts2026,
   type ScorecardCachePayload,
   type WeekCacheEntry as ScorecardWeekCacheEntry,
   type WeekData as ScorecardWeekData,
@@ -247,68 +248,42 @@ async function resolveOppChannelAsync(opp: {
   return "Other";
 }
 
+/**
+ * Marketing leads input = the EXACT same set the Operations Scorecard counts.
+ *
+ * Delegates to scorecard/builder.fetchAllSellerContacts2026 so the unified
+ * pipeline-based rule (7-pipeline whitelist + staff exclusion + Exclusion 3
+ * lc-phone-api + Exclusion 4 BCDI categorical) applies here verbatim. The
+ * old `hasAddress` + Marketing Campaign filter is gone — same rule as the
+ * Operations Scorecard `leadsByChannel`.
+ *
+ * Each scorecard LeadRecord carries a pre-resolved `source` string
+ * (customField.MarketingCampaign → contact.source → "Unknown"), which we
+ * pass through getChannel() for the 7-bucket marketing rollup
+ * (TV / PPC / Mail / PPL / Referral / Other / SEO).
+ *
+ * Side effect: every lead's resolved source is cached into
+ * contactSourceCache so resolveOppChannel can use it as a downstream
+ * fallback when an opp's own `source` field is blank.
+ */
 async function fetchAllSellerLeads(): Promise<LeadRecord[]> {
+  const scorecardLeads = await fetchAllSellerContacts2026();
   const leads: LeadRecord[] = [];
-  let startAfterId = "";
-  let startAfter = 0;
-
-  for (let page = 0; page < 50; page++) {
-    let url = `${BASE}/contacts/?locationId=${LOCATION_ID()}&limit=100`;
-    if (startAfterId)
-      url += `&startAfterId=${startAfterId}&startAfter=${startAfter}`;
-
-    const res = await fetch(url, { headers: getHeaders() });
-    if (!res.ok) break;
-    const data = await res.json();
-    const contacts = data.contacts || [];
-    if (contacts.length === 0) break;
-
-    for (const c of contacts) {
-      const created = new Date(c.dateAdded).getTime();
-      if (created < JAN1_2026) continue;
-
-      const cfs: Record<string, string> = {};
-      for (const cf of c.customFields || []) cfs[cf.id] = cf.value;
-
-      // Pre-populate channel cache for ALL contacts we see
-      //
-      // GUARDRAIL 3: Only cache when getChannel returns something real.
-      // Caching "Other" here on a listing row with empty source+campaign
-      // permanently buries the channel — the dedicated contact fetch in
-      // resolveOppChannelAsync would have read customFields fully. Leave
-      // the slot unset → async resolver does the targeted lookup later.
-      if (c.id) {
-        const campaign = cfs[MARKETING_CAMPAIGN_FIELD] || "";
-        const ch = getChannel(c.source || "", campaign);
-        if (ch && ch !== "Other") contactSourceCache.set(c.id, ch);
-      }
-
-      // Lead-count filter per Ashley 2026-05-11: matches her GHL Smart List
-      // filter exactly — Marketing Campaign field set AND Street Address
-      // non-empty. The old "Contact Type = Seller" filter was wrong and
-      // was undercounting (e.g., 4/20-4/26 PPC = 0 reported vs 1 truth).
-      const campaign = cfs[MARKETING_CAMPAIGN_FIELD] || "";
-      const hasAddress = !!(c.address1 && c.address1.trim());
-      if (campaign && hasAddress) {
-        leads.push({
-          date: created,
-          channel: getChannel(c.source || "", campaign),
-          hasAddress: true,
-        });
-      }
+  for (const sl of scorecardLeads) {
+    const ch = getChannel(sl.source || "", "");
+    if (sl.contactId && sl.source) {
+      // Pre-populate cache with the SAME channel marketing will use,
+      // so opp attribution stays consistent.
+      contactSourceCache.set(sl.contactId, ch);
     }
-
-    const meta = data.meta || {};
-    if (!meta.nextPageUrl) break;
-    startAfterId = meta.startAfterId || "";
-    startAfter = meta.startAfter || 0;
-    const lastCreated = new Date(
-      contacts[contacts.length - 1].dateAdded
-    ).getTime();
-    if (lastCreated < JAN1_2026) break;
+    leads.push({
+      date: sl.dateAdded,
+      channel: ch,
+      hasAddress: true, // pipeline-based rule: no address filter
+    });
   }
   console.log(
-    `Marketing: pre-cached ${contactSourceCache.size} contact channels from lead fetch`
+    `Marketing: ${leads.length} leads from scorecard pipeline-based fetch; cached ${contactSourceCache.size} contact channels`
   );
   return leads;
 }

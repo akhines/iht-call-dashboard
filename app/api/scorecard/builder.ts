@@ -482,7 +482,7 @@ export function getCronTargetWeekKeys(now: Date = new Date()): string[] {
 // filtered by dateAdded in 2026 (bcdi-known-good pattern using integer
 // page param + sort asc) and keep only contacts whose ID is in the
 // whitelist map. Drop staff. Yields the LeadRecord[] used downstream.
-async function fetchAllSellerContacts2026(): Promise<LeadRecord[]> {
+export async function fetchAllSellerContacts2026(): Promise<LeadRecord[]> {
   // ----- Phase 1: build the contact-ID → primary-pipeline map.
   // We use lastStageChangeAt as the "most recent stage change" tiebreaker
   // when a contact has opps in multiple whitelisted pipelines.
