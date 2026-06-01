@@ -460,23 +460,81 @@ export function getCronTargetWeekKeys(now: Date = new Date()): string[] {
 // ============ DATA FETCHERS ============
 
 // Public type: per-contact lead detail. New pipeline-based logic — a "Lead" is
-// a contact whose dateAdded is in 2026 AND has at least one opportunity in the
-// active seller pipeline whitelist (any opp status). Contact Type + address1
-// are no longer used as filters.
+// a contact whose dateAdded is in 2026 AND has at least one opportunity in
+// the active seller pipeline whitelist (any opp status). Contact Type +
+// address1 are no longer used as filters.
+//
+// Implementation: invert the join. Fetch every opportunity in each
+// whitelisted pipeline (cheap — 7 pipelines × ~100 opps/page) and build a
+// contactId → primary-pipeline map. THEN page through /contacts/search
+// filtered by dateAdded in 2026 (bcdi-known-good pattern using integer
+// page param + sort asc) and keep only contacts whose ID is in the
+// whitelist map. Drop staff. Yields the LeadRecord[] used downstream.
 async function fetchAllSellerContacts2026(): Promise<LeadRecord[]> {
+  // ----- Phase 1: build the contact-ID → primary-pipeline map.
+  // We use lastStageChangeAt as the "most recent stage change" tiebreaker
+  // when a contact has opps in multiple whitelisted pipelines.
+  const contactToPipeline = new Map<string, { pipelineId: string; stageMs: number }>();
+
+  await Promise.all(
+    Array.from(ACTIVE_SELLER_PIPELINE_IDS).map(async (pid) => {
+      let url = `${BASE}/opportunities/search?location_id=${LOCATION_ID()}&pipeline_id=${pid}&limit=100`;
+      let pageCount = 0;
+      while (pageCount < 50) {
+        pageCount++;
+        const res = await fetch(url, { headers: getHeaders() });
+        if (!res.ok) {
+          console.warn(
+            `[Scorecard] /opportunities/search pipeline=${pid} page=${pageCount} failed (${res.status})`
+          );
+          break;
+        }
+        const data = await res.json();
+        const opps: Array<{
+          contactId?: string;
+          lastStageChangeAt?: string;
+        }> = data.opportunities || [];
+        for (const o of opps) {
+          const cid = o.contactId || "";
+          if (!cid) continue;
+          const stageMs = o.lastStageChangeAt
+            ? new Date(o.lastStageChangeAt).getTime()
+            : 0;
+          const prev = contactToPipeline.get(cid);
+          if (!prev || stageMs > prev.stageMs) {
+            contactToPipeline.set(cid, { pipelineId: pid, stageMs });
+          }
+        }
+        const next = data?.meta?.nextPageUrl;
+        if (!next) break;
+        url = next;
+      }
+    })
+  );
+
+  console.log(
+    `[Scorecard] Pipeline-membership map built: ${contactToPipeline.size} unique contactIds across ${ACTIVE_SELLER_PIPELINE_IDS.size} pipelines`
+  );
+
+  // ----- Phase 2: page through contacts (filtered to 2026) using the
+  // bcdi-known-good shape: POST /contacts/search with `page` integer +
+  // pageLimit + sort asc. Keep only contacts whose ID is in the
+  // pipeline-membership map.
   const leads: LeadRecord[] = [];
   const nowIso = new Date().toISOString();
   const jan1Iso = new Date(JAN1_2026).toISOString();
+  const seen = new Set<string>();
 
-  let searchAfter: (string | number)[] | undefined = undefined;
-  let pageCount = 0;
-  const MAX_PAGES = 100; // safety cap; 100 * 100 = 10k contacts/year ceiling
+  let page = 1;
+  const PAGE_LIMIT = 100;
+  const MAX_PAGES = 200; // safety cap; covers ~20k contacts/year
 
-  while (pageCount < MAX_PAGES) {
-    pageCount++;
-    const body: Record<string, unknown> = {
+  while (page <= MAX_PAGES) {
+    const body = {
       locationId: LOCATION_ID(),
-      pageLimit: 100,
+      page,
+      pageLimit: PAGE_LIMIT,
+      sort: [{ field: "dateAdded", direction: "asc" }],
       filters: [
         {
           field: "dateAdded",
@@ -484,9 +542,7 @@ async function fetchAllSellerContacts2026(): Promise<LeadRecord[]> {
           value: { gte: jan1Iso, lte: nowIso },
         },
       ],
-      sort: [{ field: "dateAdded", direction: "asc" }],
     };
-    if (searchAfter) body.searchAfter = searchAfter;
 
     const res = await fetch(`${BASE}/contacts/search`, {
       method: "POST",
@@ -494,99 +550,91 @@ async function fetchAllSellerContacts2026(): Promise<LeadRecord[]> {
       body: JSON.stringify(body),
     });
     if (!res.ok) {
+      const errBody = await res.text().catch(() => "");
       console.warn(
-        `[Scorecard] /contacts/search failed (${res.status}) on page ${pageCount}: ${await res.text().catch(() => "")}`
+        `[Scorecard] /contacts/search failed (${res.status}) on page ${page}: ${errBody.slice(0, 300)}`
       );
+      // On 429, back off briefly and retry once. Otherwise bail.
+      if (res.status === 429) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const retry = await fetch(`${BASE}/contacts/search`, {
+          method: "POST",
+          headers: { ...getHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!retry.ok) {
+          console.warn(
+            `[Scorecard] /contacts/search retry after 429 failed (${retry.status}); halting at page ${page}`
+          );
+          break;
+        }
+        const retryData = await retry.json();
+        const retryContacts = retryData.contacts || [];
+        if (retryContacts.length === 0) break;
+        processContacts(retryContacts);
+        if (retryContacts.length < PAGE_LIMIT) break;
+        page++;
+        continue;
+      }
       break;
     }
     const data = await res.json();
     const contacts = data.contacts || [];
     if (contacts.length === 0) break;
+    processContacts(contacts);
+    if (contacts.length < PAGE_LIMIT) break;
+    page++;
+  }
 
+  function processContacts(contacts: Array<Record<string, unknown>>) {
     for (const c of contacts) {
-      const cid = c.id || "";
-      if (!cid) continue;
+      const cid = (c.id as string) || "";
+      if (!cid || seen.has(cid)) continue;
+      seen.add(cid);
       if (STAFF_CONTACT_IDS.has(cid)) continue;
-      const email = (c.email || "").toLowerCase();
+      const email = ((c.email as string) || "").toLowerCase();
       if (email && email.endsWith(STAFF_EMAIL_SUFFIX)) continue;
 
-      const createdMs = c.dateAdded ? new Date(c.dateAdded).getTime() : 0;
+      const membership = contactToPipeline.get(cid);
+      if (!membership) continue; // contact has no opp in any whitelisted pipeline
+
+      const createdMs = c.dateAdded ? new Date(c.dateAdded as string).getTime() : 0;
       if (!createdMs || createdMs < JAN1_2026) continue;
 
-      const opps: Array<{
-        id?: string;
-        pipelineId?: string;
-        lastStageChangeAt?: string;
-        createdAt?: string;
-      }> = c.opportunities || [];
-      // Find whitelisted opps. Pick the most-recent-stage-change one as the
-      // primary; if none have lastStageChangeAt, fall back to first match.
-      let primaryPipelineId = "";
-      let primaryStageChangeMs = -1;
-      for (const o of opps) {
-        const pid = o.pipelineId || "";
-        if (!ACTIVE_SELLER_PIPELINE_IDS.has(pid)) continue;
-        const t = o.lastStageChangeAt ? new Date(o.lastStageChangeAt).getTime() : 0;
-        if (t > primaryStageChangeMs) {
-          primaryStageChangeMs = t;
-          primaryPipelineId = pid;
-        }
-      }
-      if (!primaryPipelineId) continue; // no whitelisted opp → not a Lead
-
-      // Resolve source: Marketing Campaign custom field → contact.source → "Unknown"
       const cfs: Record<string, string> = {};
-      for (const cf of c.customFields || []) {
-        // /contacts/search returns customFields[].value (some legacy uses .fieldValue too)
+      const customFields = (c.customFields as Array<{
+        id?: string;
+        value?: unknown;
+        fieldValue?: unknown;
+        fieldValueString?: unknown;
+      }>) || [];
+      for (const cf of customFields) {
         const val = cf.value ?? cf.fieldValue ?? cf.fieldValueString ?? "";
         if (cf.id) cfs[cf.id] = String(val);
       }
       const campaign = (cfs[MARKETING_CAMPAIGN_FIELD] || "").trim();
-      const contactSource = (c.source || "").trim();
+      const contactSource = ((c.source as string) || "").trim();
       const source = campaign || contactSource || "Unknown";
 
-      // Warm the contact source cache so downstream getContactSource hits don't
-      // need to re-fetch this contact. GUARDRAIL 3: only cache when resolved
-      // beyond "Unknown".
       if (campaign || contactSource) {
         contactSourceCache.set(cid, campaign || contactSource);
       }
 
       leads.push({
         contactId: cid,
-        firstName: (c.firstName || "").trim(),
-        lastName: (c.lastName || "").trim(),
+        firstName: ((c.firstName as string) || "").trim(),
+        lastName: ((c.lastName as string) || "").trim(),
         email,
         dateAdded: createdMs,
-        primaryPipelineId,
-        primaryPipelineName: ACTIVE_SELLER_PIPELINES[primaryPipelineId] || "",
+        primaryPipelineId: membership.pipelineId,
+        primaryPipelineName: ACTIVE_SELLER_PIPELINES[membership.pipelineId] || "",
         source,
       });
     }
-
-    // Cursor for next page. /contacts/search returns `searchAfter` on data
-    // or each contact carries a sort cursor; the official pattern is to
-    // read it from the last contact's `searchAfter` field, or from
-    // `meta.searchAfter` / `data.searchAfter`. Defensive: try each.
-    const last = contacts[contacts.length - 1];
-    const nextCursor =
-      (data.searchAfter as (string | number)[] | undefined) ||
-      (data.meta?.searchAfter as (string | number)[] | undefined) ||
-      (last && (last.searchAfter as (string | number)[] | undefined));
-    if (!nextCursor || (Array.isArray(nextCursor) && nextCursor.length === 0)) break;
-    if (
-      searchAfter &&
-      JSON.stringify(searchAfter) === JSON.stringify(nextCursor)
-    ) {
-      // Cursor didn't advance — bail to avoid infinite loop.
-      break;
-    }
-    searchAfter = nextCursor;
-    if (contacts.length < 100) break;
   }
 
   console.log(
-    `[Scorecard] fetchAllSellerContacts2026: ${leads.length} leads across ${pageCount} pages (pipeline-whitelisted)`
+    `[Scorecard] fetchAllSellerContacts2026: ${leads.length} leads (after pipeline+staff filter) across ${page} pages of contacts/search`
   );
 
   // Sort ascending by dateAdded for stable drilldown order.
