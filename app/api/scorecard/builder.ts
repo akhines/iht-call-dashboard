@@ -474,43 +474,68 @@ async function fetchAllSellerContacts2026(): Promise<LeadRecord[]> {
   // ----- Phase 1: build the contact-ID → primary-pipeline map.
   // We use lastStageChangeAt as the "most recent stage change" tiebreaker
   // when a contact has opps in multiple whitelisted pipelines.
+  //
+  // Serialized across pipelines + paced between page fetches because GHL
+  // rate-limits aggressively (429 returns "Too Many Requests" within
+  // milliseconds when this runs alongside the rest of the scorecard build).
   const contactToPipeline = new Map<string, { pipelineId: string; stageMs: number }>();
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-  await Promise.all(
-    Array.from(ACTIVE_SELLER_PIPELINE_IDS).map(async (pid) => {
-      let url = `${BASE}/opportunities/search?location_id=${LOCATION_ID()}&pipeline_id=${pid}&limit=100`;
-      let pageCount = 0;
-      while (pageCount < 50) {
-        pageCount++;
-        const res = await fetch(url, { headers: getHeaders() });
-        if (!res.ok) {
-          console.warn(
-            `[Scorecard] /opportunities/search pipeline=${pid} page=${pageCount} failed (${res.status})`
-          );
-          break;
-        }
-        const data = await res.json();
-        const opps: Array<{
-          contactId?: string;
-          lastStageChangeAt?: string;
-        }> = data.opportunities || [];
-        for (const o of opps) {
-          const cid = o.contactId || "";
-          if (!cid) continue;
-          const stageMs = o.lastStageChangeAt
-            ? new Date(o.lastStageChangeAt).getTime()
-            : 0;
-          const prev = contactToPipeline.get(cid);
-          if (!prev || stageMs > prev.stageMs) {
-            contactToPipeline.set(cid, { pipelineId: pid, stageMs });
-          }
-        }
-        const next = data?.meta?.nextPageUrl;
-        if (!next) break;
-        url = next;
+  async function fetchWith429Retry(url: string, body?: object, method: "GET" | "POST" = "GET"): Promise<Response | null> {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const init: RequestInit = {
+        method,
+        headers: body
+          ? { ...getHeaders(), "Content-Type": "application/json" }
+          : getHeaders(),
+      };
+      if (body) init.body = JSON.stringify(body);
+      const res = await fetch(url, init);
+      if (res.status !== 429) return res;
+      const wait = 1500 * (attempt + 1);
+      console.warn(`[Scorecard] 429 on ${url.slice(0, 80)} attempt=${attempt + 1}, backing off ${wait}ms`);
+      await sleep(wait);
+    }
+    return null;
+  }
+
+  for (const pid of Array.from(ACTIVE_SELLER_PIPELINE_IDS)) {
+    let url = `${BASE}/opportunities/search?location_id=${LOCATION_ID()}&pipeline_id=${pid}&limit=100`;
+    let pageCount = 0;
+    while (pageCount < 50) {
+      pageCount++;
+      const res = await fetchWith429Retry(url);
+      if (!res || !res.ok) {
+        console.warn(
+          `[Scorecard] /opportunities/search pipeline=${pid} page=${pageCount} failed (${res?.status ?? "no response"})`
+        );
+        break;
       }
-    })
-  );
+      const data = await res.json();
+      const opps: Array<{
+        contactId?: string;
+        lastStageChangeAt?: string;
+      }> = data.opportunities || [];
+      for (const o of opps) {
+        const cid = o.contactId || "";
+        if (!cid) continue;
+        const stageMs = o.lastStageChangeAt
+          ? new Date(o.lastStageChangeAt).getTime()
+          : 0;
+        const prev = contactToPipeline.get(cid);
+        if (!prev || stageMs > prev.stageMs) {
+          contactToPipeline.set(cid, { pipelineId: pid, stageMs });
+        }
+      }
+      const next = data?.meta?.nextPageUrl;
+      if (!next) break;
+      url = next;
+      // Pace requests to avoid rate-limit storms.
+      await sleep(200);
+    }
+    // Inter-pipeline pause.
+    await sleep(300);
+  }
 
   console.log(
     `[Scorecard] Pipeline-membership map built: ${contactToPipeline.size} unique contactIds across ${ACTIVE_SELLER_PIPELINE_IDS.size} pipelines`
@@ -544,38 +569,16 @@ async function fetchAllSellerContacts2026(): Promise<LeadRecord[]> {
       ],
     };
 
-    const res = await fetch(`${BASE}/contacts/search`, {
-      method: "POST",
-      headers: { ...getHeaders(), "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      const errBody = await res.text().catch(() => "");
+    const res = await fetchWith429Retry(
+      `${BASE}/contacts/search`,
+      body,
+      "POST"
+    );
+    if (!res || !res.ok) {
+      const errBody = res ? await res.text().catch(() => "") : "no response";
       console.warn(
-        `[Scorecard] /contacts/search failed (${res.status}) on page ${page}: ${errBody.slice(0, 300)}`
+        `[Scorecard] /contacts/search failed (${res?.status ?? "n/a"}) on page ${page}: ${errBody.slice(0, 300)}`
       );
-      // On 429, back off briefly and retry once. Otherwise bail.
-      if (res.status === 429) {
-        await new Promise((r) => setTimeout(r, 2000));
-        const retry = await fetch(`${BASE}/contacts/search`, {
-          method: "POST",
-          headers: { ...getHeaders(), "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
-        if (!retry.ok) {
-          console.warn(
-            `[Scorecard] /contacts/search retry after 429 failed (${retry.status}); halting at page ${page}`
-          );
-          break;
-        }
-        const retryData = await retry.json();
-        const retryContacts = retryData.contacts || [];
-        if (retryContacts.length === 0) break;
-        processContacts(retryContacts);
-        if (retryContacts.length < PAGE_LIMIT) break;
-        page++;
-        continue;
-      }
       break;
     }
     const data = await res.json();
@@ -584,6 +587,8 @@ async function fetchAllSellerContacts2026(): Promise<LeadRecord[]> {
     processContacts(contacts);
     if (contacts.length < PAGE_LIMIT) break;
     page++;
+    // Pace requests to keep the 429 budget healthy through ~1500 contacts.
+    await sleep(150);
   }
 
   function processContacts(contacts: Array<Record<string, unknown>>) {
