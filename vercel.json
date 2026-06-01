@@ -19,6 +19,7 @@
   },
   "crons": [
     { "path": "/api/scorecard/refresh", "schedule": "0 11 * * 1" },
+    { "path": "/api/scorecard/refresh?all=true", "schedule": "0 5 31 12 *" },
     { "path": "/api/marketing/refresh", "schedule": "5 11 * * 1" },
     { "path": "/api/scorecard/validate", "schedule": "0 13 * * *" }
   ]
