@@ -3,6 +3,7 @@ import {
   FRESH_KEY as SCORECARD_FRESH_KEY,
   weekKey as scorecardWeekKey,
   fetchAllSellerContacts2026,
+  type LeadRecord as ScorecardLeadRecord,
   type ScorecardCachePayload,
   type WeekCacheEntry as ScorecardWeekCacheEntry,
   type WeekData as ScorecardWeekData,
@@ -169,6 +170,10 @@ interface LeadRecord {
   date: number;
   channel: string;
   hasAddress: boolean;
+  // Full scorecard LeadRecord (contactId / firstName / lastName / email /
+  // primaryPipelineId / primaryPipelineName / source) preserved so the
+  // marketing per-week payload can carry it for the Leads drilldown UI.
+  detail: ScorecardLeadRecord;
 }
 interface ApptRecord {
   date: number;
@@ -280,6 +285,7 @@ async function fetchAllSellerLeads(): Promise<LeadRecord[]> {
       date: sl.dateAdded,
       channel: ch,
       hasAddress: true, // pipeline-based rule: no address filter
+      detail: sl,
     });
   }
   console.log(
@@ -512,6 +518,18 @@ export interface MarketingWeekData {
   // Cross-month boundary weeks only — keeps MTD KPIs accurate when a deal
   // closes early in the next month within a week that spans both.
   monthSplits?: MarketingMonthSplits;
+  // ── Leads drilldown fields (mirror of /api/scorecard's per-week payload) ──
+  // Counts per whitelisted pipeline ID (e.g. { "6tntgcGDlTyw30KUgRrS": 8, ... })
+  // — same shape as scorecard's leadsByPipeline so the shared
+  // LeadsDrilldownModal can read it directly.
+  leadsByPipeline?: Record<string, number>;
+  // Counts per MARKETING channel (TV/PPC/Mail/SEO/Referral/PPL/Other) —
+  // matches the channel labels used in this dashboard so chip counts add
+  // up consistently with the visible per-channel cells.
+  leadsByChannel?: Record<string, number>;
+  // Full per-lead detail sorted by dateAdded asc. Drives the drilldown's
+  // scrollable list with name → GHL contact-detail links.
+  leadDetails?: ScorecardLeadRecord[];
 }
 
 export interface MarketingData {
@@ -642,12 +660,31 @@ function buildWeekData(
         }
       }
     }
+    // Aggregate per-week lead detail across ALL channels — used by the
+    // Leads drilldown modal. Matches /api/scorecard's per-week leadDetails
+    // shape so the shared LeadsDrilldownModal works without divergence.
+    const weekLeadsAll = addressableLeads
+      .filter((l) => findWeekKey(new Date(l.date), weeks) === w.key)
+      .sort((a, b) => a.date - b.date);
+    const leadsByPipeline: Record<string, number> = {};
+    const leadsByChannel: Record<string, number> = {};
+    for (const l of weekLeadsAll) {
+      const pid = l.detail.primaryPipelineId;
+      if (pid) leadsByPipeline[pid] = (leadsByPipeline[pid] || 0) + 1;
+      const ch = l.channel || "Other";
+      leadsByChannel[ch] = (leadsByChannel[ch] || 0) + 1;
+    }
+    const leadDetails: ScorecardLeadRecord[] = weekLeadsAll.map((l) => l.detail);
+
     return {
       weekKey: w.key,
       startDate: w.start.toISOString().slice(0, 10),
       endDate: w.end.toISOString().slice(0, 10),
       channels,
       monthSplits: crossesMonth ? monthSplits : undefined,
+      leadsByPipeline,
+      leadsByChannel,
+      leadDetails,
     };
   });
 }

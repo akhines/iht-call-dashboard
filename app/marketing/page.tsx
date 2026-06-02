@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
+import LeadsDrilldownModal from "../components/LeadsDrilldownModal";
+import type { LeadRecord } from "../components/scorecard-types";
 
 interface ChannelWeekData {
   leads: number;
@@ -30,6 +32,11 @@ interface MarketingWeekData {
   channels: Record<string, ChannelWeekData>;
   // Cross-month boundary weeks only — see api/marketing/builder.ts.
   monthSplits?: MarketingMonthSplits;
+  // Leads drilldown — populated by the marketing builder (same shape as
+  // /api/scorecard so the shared LeadsDrilldownModal can read it directly).
+  leadsByPipeline?: Record<string, number>;
+  leadsByChannel?: Record<string, number>;
+  leadDetails?: LeadRecord[];
 }
 
 const CHANNEL_COLORS: Record<string, string> = {
@@ -177,6 +184,14 @@ export default function MarketingPage() {
   const [editValue, setEditValue] = useState("");
   const [saving, setSaving] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // Leads drilldown — mirrors /scorecard. `channel` is the marketing channel
+  // (TV/PPC/Mail/SEO/Referral/PPL/Other) the user clicked, or null when they
+  // clicked the per-week total (all leads, no channel filter).
+  const [leadsDrilldown, setLeadsDrilldown] = useState<{
+    weekKey: string;
+    weekStart: string;
+    channel: string | null;
+  } | null>(null);
 
   const fetchData = () => {
     setLoading(true);
@@ -470,6 +485,27 @@ export default function MarketingPage() {
     const data = week.channels[ch];
     if (!data) return "—";
     const val = (data as unknown as Record<string, number>)[metric.key] || 0;
+
+    // Leads cell — open drilldown filtered to this channel + week. Only when
+    // the builder has populated leadDetails (mirrors scorecard's fallback
+    // pattern; a legacy cache without leadDetails just renders the number).
+    if (metric.key === "leads" && val > 0 && (week.leadDetails?.length ?? 0) > 0) {
+      return (
+        <button
+          onClick={() =>
+            setLeadsDrilldown({
+              weekKey: week.weekKey,
+              weekStart: week.startDate,
+              channel: ch,
+            })
+          }
+          className="text-blue-600 hover:text-blue-800 underline font-medium"
+          title={`See the ${val} ${ch} leads for this week`}
+        >
+          {val}
+        </button>
+      );
+    }
 
     // Editable cell
     if (metric.editable) {
@@ -1069,10 +1105,29 @@ export default function MarketingPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {weeks.map((week) => (
+                  {weeks.map((week) => {
+                    const weekTotalLeads = (week.leadDetails?.length ?? 0);
+                    const weekLabel = `${fmtDate(week.startDate)} - ${fmtDate(week.endDate)}`;
+                    return (
                     <tr key={week.weekKey} className="hover:bg-blue-50/30 transition border-b border-gray-50">
                       <td className="px-3 py-2 whitespace-nowrap text-gray-700 font-medium sticky left-0 bg-white z-[5] border-r border-gray-100">
-                        {fmtDate(week.startDate)} - {fmtDate(week.endDate)}
+                        {weekTotalLeads > 0 ? (
+                          <button
+                            onClick={() =>
+                              setLeadsDrilldown({
+                                weekKey: week.weekKey,
+                                weekStart: week.startDate,
+                                channel: null,
+                              })
+                            }
+                            className="text-gray-700 hover:text-blue-700 underline decoration-dotted underline-offset-2"
+                            title={`See all ${weekTotalLeads} leads for this week`}
+                          >
+                            {weekLabel}
+                          </button>
+                        ) : (
+                          weekLabel
+                        )}
                       </td>
                       {visibleChannels.map((ch) =>
                         METRICS.map((m) => (
@@ -1083,7 +1138,8 @@ export default function MarketingPage() {
                         ))
                       )}
                     </tr>
-                  ))}
+                    );
+                  })}
 
                   {/* Totals row */}
                   <tr className="bg-emerald-50 border-t-2 border-emerald-300 font-bold">
@@ -1128,6 +1184,65 @@ export default function MarketingPage() {
           })()}
         </div>
       </main>
+      {/* Leads drilldown modal — opens when Ashley clicks a per-channel
+          Leads cell or a week label. When channel is set, leadDetails get
+          filtered to the marketing-channel bucket (TV/PPC/Mail/etc.) so the
+          table matches the visible per-channel count. When channel is null,
+          shows every lead for the week. */}
+      {(() => {
+        if (!leadsDrilldown) return null;
+        const week = weeks.find((w) => w.weekKey === leadsDrilldown.weekKey);
+        if (!week) return null;
+        const all = week.leadDetails || [];
+        // Helper mirroring the channel-bucketing the marketing builder uses
+        // for `leadsByChannel` (TV/PPC/Mail/SEO/Referral/PPL/Other from the
+        // raw scorecard `source` string).
+        const sourceToChannel = (s: string): string => {
+          const v = (s || "").toLowerCase().trim();
+          if (!v) return "Other";
+          if (v.includes("ppc") || v.includes("google ads")) return "PPC";
+          if (
+            v.includes("seo") ||
+            v.includes("google search") ||
+            v.includes("organic") ||
+            v.includes("gmb") ||
+            v.includes("google my business")
+          )
+            return "SEO";
+          if (v.includes("direct mail") || v.includes("probate")) return "Mail";
+          if (v.startsWith("tv") || /\btv\b/.test(v)) return "TV";
+          if (v.includes("ppl") || v.includes("pay per lead")) return "PPL";
+          if (v.includes("referral")) return "Referral";
+          if (v.includes("mail")) return "Mail";
+          return "Other";
+        };
+        const filteredLeads = leadsDrilldown.channel
+          ? all.filter((l) => sourceToChannel(l.source) === leadsDrilldown.channel)
+          : all;
+        // Pipeline + channel chip counts derived from the filtered set so
+        // the chips reflect what's actually visible in the table below.
+        const byPipeline: Record<string, number> = {};
+        const byChannel: Record<string, number> = {};
+        for (const l of filteredLeads) {
+          if (l.primaryPipelineId)
+            byPipeline[l.primaryPipelineId] =
+              (byPipeline[l.primaryPipelineId] || 0) + 1;
+          const ch = sourceToChannel(l.source);
+          byChannel[ch] = (byChannel[ch] || 0) + 1;
+        }
+        const title = leadsDrilldown.channel
+          ? `${CHANNEL_LABELS[leadsDrilldown.channel] || leadsDrilldown.channel} Leads — ${fmtDate(leadsDrilldown.weekStart)}`
+          : `Leads — ${fmtDate(leadsDrilldown.weekStart)}`;
+        return (
+          <LeadsDrilldownModal
+            title={title}
+            byPipeline={byPipeline}
+            byChannel={byChannel}
+            leads={filteredLeads}
+            onClose={() => setLeadsDrilldown(null)}
+          />
+        );
+      })()}
     </div>
   );
 }
