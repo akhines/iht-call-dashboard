@@ -92,6 +92,34 @@ const STAFF_EMAIL_SUFFIX = "@theimpacthometeam.com";
 // See project_scorecard_leads_rule.md (Exclusion 3).
 const LC_PHONE_API_SOURCE = "lc-phone-api";
 
+// ============ EXCLUSION 3 OVERRIDES (added 2026-06-03) ============
+// Two narrow overrides on Exclusion 3 (lc-phone-api outbound-only). When
+// EITHER fires, the contact is kept regardless of conversation direction.
+// BCDI categorical (Exclusion 4) + staff exclusion still apply unchanged.
+//
+// Override 1 — Source-marker names always keep.
+// Ashley uses suffixes like "*TV", "*DM", "*PPC", "*SEO", "*PPL", "*REF" on
+// contact names to mark the inbound channel when the lead came in via a
+// route that didn't auto-populate source. Those names are unambiguously
+// inbound — never apply the outbound-only exclusion to them.
+const SOURCE_MARKER_NAME_PATTERN = /\*(TV|DM|PPC|SEO|PPL|REF)\b/i;
+
+// Override 2 — Downstream pipeline engagement always keep.
+// If a contact has ≥1 opp (any status) in a downstream pipeline — Mike,
+// Josh, Offer Followup, Transaction Coordination, or Deals — they've been
+// worked by a closer regardless of how they were dialed in. Keep them.
+//
+// IMPORTANT: this is a NARROW override of Exclusion 3 ONLY. BCDI categorical
+// (Exclusion 4) still wins — BCDI prospecting targets are never leads even
+// if a closer later worked one.
+const DOWNSTREAM_ENGAGEMENT_PIPELINES = new Set<string>([
+  "nwSjS0rUTMGbgDvyrEe4", // Mike the Closer
+  "ggnBpwig6OE37fXPQv7a", // Josh The Closer
+  "jTIXfKdqlRKALGw8fj4e", // Offer Followup
+  "ofMQolXiKGyg6WNOJS88", // Transaction Coordination
+  "DiGXnGTlQCOMZQJmWQe9", // Deals
+]);
+
 // BCDI categorical exclusion: any contact whose `source` matches /^BCDI/i is
 // an outbound prospecting target from a BCDI list (BCDI-CaseSearch, BCDI-ROW,
 // BCDI-VacantList, BCDI-Estate, etc.) — not an inbound lead. Categorical
@@ -483,14 +511,17 @@ export function getCronTargetWeekKeys(now: Date = new Date()): string[] {
 // page param + sort asc) and keep only contacts whose ID is in the
 // whitelist map. Drop staff. Yields the LeadRecord[] used downstream.
 export async function fetchAllSellerContacts2026(): Promise<LeadRecord[]> {
-  // ----- Phase 1: build the contact-ID → primary-pipeline map.
-  // We use lastStageChangeAt as the "most recent stage change" tiebreaker
-  // when a contact has opps in multiple whitelisted pipelines.
+  // ----- Phase 1: build the contact-ID → primary-pipeline map AND a
+  // contact-ID → set-of-all-pipelines map.
+  // Primary map uses lastStageChangeAt as the tiebreaker when a contact has
+  // opps in multiple whitelisted pipelines. The full set drives the
+  // Override 2 check below (any downstream pipeline membership = keep).
   //
   // Serialized across pipelines + paced between page fetches because GHL
   // rate-limits aggressively (429 returns "Too Many Requests" within
   // milliseconds when this runs alongside the rest of the scorecard build).
   const contactToPipeline = new Map<string, { pipelineId: string; stageMs: number }>();
+  const contactToAllPipelines = new Map<string, Set<string>>();
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
   async function fetchWith429Retry(url: string, body?: object, method: "GET" | "POST" = "GET"): Promise<Response | null> {
@@ -538,6 +569,14 @@ export async function fetchAllSellerContacts2026(): Promise<LeadRecord[]> {
         if (!prev || stageMs > prev.stageMs) {
           contactToPipeline.set(cid, { pipelineId: pid, stageMs });
         }
+        // Track every pipeline the contact has an opp in — used by the
+        // Override 2 downstream-engagement check on Exclusion 3.
+        let allSet = contactToAllPipelines.get(cid);
+        if (!allSet) {
+          allSet = new Set<string>();
+          contactToAllPipelines.set(cid, allSet);
+        }
+        allSet.add(pid);
       }
       const next = data?.meta?.nextPageUrl;
       if (!next) break;
@@ -730,9 +769,48 @@ export async function fetchAllSellerContacts2026(): Promise<LeadRecord[]> {
 
     // ----- Pass 3: for candidates whose createdBy.source === lc-phone-api,
     // run the inbound check in parallel batches. Exclusion 3.
-    const lcPhoneApiCands = candidates.filter(
-      (cand) => createdBySourceByCid.get(cand.cid) === LC_PHONE_API_SOURCE
-    );
+    //
+    // OVERRIDES (added 2026-06-03): before running the inbound check, drop
+    // any candidate that matches either override:
+    //   • Override 1 — name contains a source-marker suffix (*TV/*DM/*PPC/
+    //     *SEO/*PPL/*REF) → always keep, inbound by convention.
+    //   • Override 2 — contact has ≥1 opp in a downstream pipeline (Mike,
+    //     Josh, Offer Followup, TC, Deals) → always keep, closer has worked
+    //     them.
+    // Either match skips the inbound check entirely. BCDI categorical
+    // (Exclusion 4) and staff exclusion still apply unchanged upstream.
+    let override1Kept = 0;
+    let override2Kept = 0;
+    const lcPhoneApiCands: Candidate[] = [];
+    for (const cand of candidates) {
+      if (createdBySourceByCid.get(cand.cid) !== LC_PHONE_API_SOURCE) continue;
+
+      const firstName = ((cand.c.firstName as string) || "").trim();
+      const lastName = ((cand.c.lastName as string) || "").trim();
+      const contactName = ((cand.c.contactName as string) || "").trim();
+      const displayName = `${firstName} ${lastName} ${contactName}`.trim();
+      if (SOURCE_MARKER_NAME_PATTERN.test(displayName)) {
+        override1Kept++;
+        continue;
+      }
+
+      const allPipelines = contactToAllPipelines.get(cand.cid);
+      if (allPipelines) {
+        let downstreamHit = false;
+        for (const pid of Array.from(allPipelines)) {
+          if (DOWNSTREAM_ENGAGEMENT_PIPELINES.has(pid)) {
+            downstreamHit = true;
+            break;
+          }
+        }
+        if (downstreamHit) {
+          override2Kept++;
+          continue;
+        }
+      }
+
+      lcPhoneApiCands.push(cand);
+    }
     lcPhoneApiChecked += lcPhoneApiCands.length;
     const excludedCids = new Set<string>();
     for (let i = 0; i < lcPhoneApiCands.length; i += PER_CONTACT_CONCURRENCY) {
@@ -783,9 +861,9 @@ export async function fetchAllSellerContacts2026(): Promise<LeadRecord[]> {
       });
     }
 
-    if (bcdiExcluded || lcPhoneApiChecked) {
+    if (bcdiExcluded || lcPhoneApiChecked || override1Kept || override2Kept) {
       console.log(
-        `[Scorecard] Exclusion stats (page batch): candidates=${candidates.length} BCDI=${bcdiExcluded} lcPhoneApiChecked=${lcPhoneApiChecked} lcPhoneApiExcluded=${lcPhoneApiExcluded}`
+        `[Scorecard] Exclusion stats (page batch): candidates=${candidates.length} BCDI=${bcdiExcluded} lcPhoneApiChecked=${lcPhoneApiChecked} lcPhoneApiExcluded=${lcPhoneApiExcluded} override1NameMarker=${override1Kept} override2DownstreamPipeline=${override2Kept}`
       );
     }
   }
